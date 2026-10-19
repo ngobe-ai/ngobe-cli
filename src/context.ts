@@ -37,17 +37,28 @@ How to work:
 
 /**
  * Cheap context management: when the history gets too large, blank out the oldest
- * tool outputs. Message structure is preserved so tool_call/tool pairs stay valid.
+ * tool outputs and tool-call arguments (e.g. a whole file sent to write_file).
+ * Message structure is preserved so tool_call/tool pairs stay valid.
  * Replace this with LLM-based summarization later.
  */
 export function trimHistory(messages: Message[], maxChars = 200_000): void {
+  const calls = (m: Message) => (m.role === "assistant" ? (m.tool_calls ?? []) : []);
   const size = () =>
-    messages.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : 0), 0);
+    messages.reduce(
+      (n, m) =>
+        n +
+        (typeof m.content === "string" ? m.content.length : 0) +
+        calls(m).reduce((k, c) => k + (c.type === "function" ? c.function.arguments.length : 0), 0),
+      0,
+    );
   if (size() <= maxChars) return;
   for (const m of messages) {
     if (size() <= maxChars) return;
     if (m.role === "tool" && typeof m.content === "string" && m.content.length > 300) {
       m.content = "[older tool output removed to save context]";
+    }
+    for (const c of calls(m)) {
+      if (c.type === "function" && c.function.arguments.length > 300) c.function.arguments = "{}";
     }
   }
 }

@@ -96,6 +96,7 @@ export function App({store, config, onInterrupt}: Props) {
           {config.yolo ? <Text color="yellow">[yolo] · </Text> : null}
           <Text dimColor>{config.model}</Text>
           {store.status ? <Text dimColor> · {store.status}</Text> : null}
+          {store.queuedCount ? <Text dimColor> · {store.queuedCount} queued</Text> : null}
           {scrolled ? <Text color="yellow"> · scrolled ↑</Text> : null}
         </Text>
         <Text dimColor> </Text>
@@ -217,7 +218,15 @@ function InputBox({
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      if (!onCtrlC()) store.requestExit();
+      if (onCtrlC()) return; // cancelled a run
+      if (value) {
+        // Clear typed text first; Ctrl+C at an empty prompt quits.
+        setValue("");
+        setCursor(0);
+        setHistIndex(null);
+      } else {
+        store.requestExit();
+      }
       return;
     }
 

@@ -5,10 +5,17 @@ import { bold, cyan, dim, red, yellow, type Ui } from "./ui.js";
 export class LineUi implements Ui {
   private rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+  /** canConfirm is false when stdin isn't a terminal: piped lines are requests, not y/n answers. */
+  constructor(private canConfirm = process.stdin.isTTY === true) {}
+
   async ask(): Promise<string> {
     return this.rl.question(bold(cyan("❯ ")));
   }
   confirm(prompt: string): Promise<string> {
+    if (!this.canConfirm) {
+      console.log(yellow(`  ${prompt} denied: no terminal to ask (use --yolo to allow)`));
+      return Promise.resolve("n");
+    }
     return this.rl.question(`  ${prompt} [y/n/a] `);
   }
   onInterrupt(cb: () => boolean) {

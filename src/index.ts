@@ -35,6 +35,7 @@ async function main() {
     controller = new AbortController();
     try {
       await agent.run(input, controller.signal);
+      if (controller.signal.aborted) ui.warn("\nInterrupted."); // cancelled during a tool, so run() returned
     } catch (err) {
       if (controller.signal.aborted) ui.warn("\nInterrupted.");
       else ui.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);

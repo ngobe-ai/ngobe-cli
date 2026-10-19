@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
 import type { Tool } from "../types.js";
 import { reqStr } from "./util.js";
-import { IGNORE } from "./glob.js";
+import { findFiles } from "./glob.js";
 
 const MAX_MATCHES = 100;
 
@@ -24,7 +23,7 @@ export const grep: Tool = {
   async run(args, ctx) {
     const re = new RegExp(reqStr(args, "pattern"));
     const pattern = typeof args.glob === "string" && args.glob ? args.glob : "**/*";
-    const files = await fg(pattern, { cwd: ctx.cwd, ignore: IGNORE });
+    const files = await findFiles(pattern, ctx.cwd);
 
     const hits: string[] = [];
     for (const file of files.sort()) {

@@ -30,7 +30,7 @@ export class Agent {
     this.messages.push({ role: "user", content: userInput });
 
     for (let turn = 0; turn < config.maxTurns; turn++) {
-      trimHistory(this.messages);
+      trimHistory(this.messages, config.maxContextChars);
 
       const result = await llm.chat(
         [{ role: "system", content: systemPrompt }, ...this.messages],
@@ -88,6 +88,7 @@ export class Agent {
 
     ui.tool(tool.describe?.(args) ?? name);
     if (!(await perms.check(tool, args))) return "Error: the user denied this action.";
+    if (signal.aborted) return "Cancelled by user."; // Ctrl+C while the prompt was open
 
     try {
       return truncate(await tool.run(args, { cwd: config.cwd, signal }));

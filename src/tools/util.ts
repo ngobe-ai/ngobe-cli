@@ -1,15 +1,17 @@
 import path from "node:path";
 import type { Args } from "../types.js";
 
+/** True if p (relative to cwd, or absolute) is cwd or somewhere below it. */
+export function isInside(cwd: string, p: string): boolean {
+  const rel = path.relative(cwd, path.resolve(cwd, p));
+  return rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
+}
+
 /** Resolve a user/model-supplied path and refuse anything outside the project directory. */
 export function resolveInside(cwd: string, p: unknown): string {
   if (typeof p !== "string" || !p) throw new Error('argument "path" must be a non-empty string');
-  const abs = path.resolve(cwd, p);
-  const rel = path.relative(cwd, abs);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`path is outside the project directory: ${p}`);
-  }
-  return abs;
+  if (!isInside(cwd, p)) throw new Error(`path is outside the project directory: ${p}`);
+  return path.resolve(cwd, p);
 }
 
 export function reqStr(args: Args, key: string, allowEmpty = false): string {

@@ -19,9 +19,14 @@ export const editFile: Tool = {
   describe: (a) => `edit ${a.path}\n    - ${preview(a.old_str)}\n    + ${preview(a.new_str)}`,
   async run(args, ctx) {
     const abs = resolveInside(ctx.cwd, reqStr(args, "path"));
-    const oldStr = reqStr(args, "old_str");
-    const newStr = reqStr(args, "new_str", true);
+    let oldStr = reqStr(args, "old_str");
+    let newStr = reqStr(args, "new_str", true);
     const text = await fs.readFile(abs, "utf8");
+    // Models send "\n" line endings; still match CRLF files, and keep them CRLF.
+    if (text.includes("\r\n") && !oldStr.includes("\r\n")) {
+      oldStr = oldStr.replace(/\n/g, "\r\n");
+      newStr = newStr.replace(/\r?\n/g, "\r\n");
+    }
 
     const count = text.split(oldStr).length - 1;
     if (count === 0) throw new Error("old_str was not found. Re-read the file and copy the text exactly.");

@@ -23,9 +23,11 @@ export const bash: Tool = {
     const timeoutMs = (optInt(args, "timeout_seconds") ?? 120) * 1000;
 
     return new Promise<string>((resolve) => {
+      // detached = own process group, so a timeout or Ctrl+C can kill everything the
+      // command started. Killing only bash leaves its children running and holding the pipes.
       const child = spawn("bash", ["-c", command], {
         cwd: ctx.cwd,
-        signal: ctx.signal,
+        detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -36,20 +38,35 @@ export const bash: Tool = {
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
 
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
-      }, timeoutMs);
+      let stopped: string | null = null;
+      const stop = (reason: string) => {
+        if (stopped) return;
+        stopped = reason;
+        try {
+          if (child.pid) process.kill(-child.pid, "SIGKILL"); // negative pid = the whole group
+        } catch {
+          // already exited
+        }
+        // A process that left the group may still hold the pipes; don't wait for it.
+        child.stdout.destroy();
+        child.stderr.destroy();
+      };
+      const timer = setTimeout(() => stop(`timed out after ${timeoutMs / 1000}s`), timeoutMs);
+      const onAbort = () => stop("cancelled by user");
+      if (ctx.signal?.aborted) onAbort();
+      else ctx.signal?.addEventListener("abort", onAbort, { once: true });
+      const cleanup = () => {
+        clearTimeout(timer);
+        ctx.signal?.removeEventListener("abort", onAbort);
+      };
 
       child.on("error", (err) => {
-        clearTimeout(timer);
+        cleanup();
         resolve(`Error: ${err.message}\n${output}`);
       });
       child.on("close", (code) => {
-        clearTimeout(timer);
-        const status = timedOut ? `timed out after ${timeoutMs / 1000}s` : `exit code ${code}`;
-        resolve(`${status}\n${output}`);
+        cleanup();
+        resolve(`${stopped ?? `exit code ${code}`}\n${output}`);
       });
     });
   },

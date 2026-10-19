@@ -65,26 +65,41 @@ export class Store {
   // --- entries ------------------------------------------------------------
 
   submit(text: string) {
-    this.finalize();
-    this.entries.push({ id: nextId++, kind: "user", text });
     this.pushHistory(text);
-    this.status = "thinking…";
     const waiter = this.askWaiter;
     if (waiter) {
       this.askWaiter = null;
+      this.start(text);
       waiter(text);
     } else {
-      this.queued.push(text); // type-ahead submitted while the agent was busy
+      this.queued.push(text); // type-ahead while the agent is busy; shown once ask() takes it
+      this.notify(true);
     }
-    this.notify(true);
   }
 
   ask(): Promise<string> {
     const queued = this.queued.shift();
-    if (queued !== undefined) return Promise.resolve(queued);
+    if (queued !== undefined) {
+      this.start(queued);
+      return Promise.resolve(queued);
+    }
+    this.status = ""; // idle until the next submit
+    this.notify(true);
     return new Promise((resolve) => {
       this.askWaiter = resolve;
     });
+  }
+
+  get queuedCount() {
+    return this.queued.length;
+  }
+
+  /** Show a request in the transcript as the agent starts on it. */
+  private start(text: string) {
+    this.finalize();
+    this.entries.push({ id: nextId++, kind: "user", text });
+    this.status = "thinking…";
+    this.notify(true);
   }
 
   write(chunk: string) {
@@ -112,7 +127,7 @@ export class Store {
 
   tool(summary: string) {
     this.finalize();
-    this.status = "";
+    this.status = "working…"; // until the model streams again (covers the tool run and the next call)
     this.entries.push({ id: nextId++, kind: "tool", text: summary });
     this.notify(true);
   }

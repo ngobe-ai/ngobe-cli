@@ -11,6 +11,8 @@ Mugamba is a minimal coding agent for any OpenAI-compatible endpoint.
     MUGAMBA_BASE_URL=https://<provider>/v1 MUGAMBA_API_KEY=... MUGAMBA_MODEL=<model> bun run dev
     # one-shot
     bun run dev -- "add a unit test for parseConfig"
+    # tests (bun test, files in test/)
+    bun test
 
 ## Layout
 
