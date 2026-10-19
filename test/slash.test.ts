@@ -7,7 +7,8 @@ import { loadAgents, parseAgent } from "../src/agents.js";
 import { LLM } from "../src/llm.js";
 import { Permissions } from "../src/permissions.js";
 import type { Session } from "../src/session.js";
-import { findCommand, runSlash } from "../src/slash.js";
+import { execFileSync } from "node:child_process";
+import { findCommand, reviewRequest, runSlash } from "../src/slash.js";
 import { buildTools } from "../src/tools/index.js";
 import { taskTool } from "../src/tools/task.js";
 import { isTrusted, trustFolder } from "../src/trust.js";
@@ -71,9 +72,28 @@ describe("slash commands", () => {
     const { env } = session();
     const init = await runSlash("/init", env);
     expect(init.kind === "prompt" && init.text).toContain("AGENTS.md");
-    const review = await runSlash("/review main", env);
-    expect(review.kind === "prompt" && review.text).toContain("since main");
+    const review = await runSlash("/review", env);
+    expect(review.kind === "prompt" && review.text).toContain("Review");
     expect((await runSlash("/quit", env)).kind).toBe("exit");
+  });
+
+  test("a review request carries the diff itself (the lean model needs no tool call to see it), never secrets", async () => {
+    const dir = tmpDir();
+    const run = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "pipe" });
+    run("init", "-q");
+    run("config", "user.email", "t@example.com");
+    run("config", "user.name", "t");
+    fs.writeFileSync(path.join(dir, "a.js"), "export const a = 1;\n");
+    fs.writeFileSync(path.join(dir, ".env"), "TOKEN=old\n");
+    run("add", "-A");
+    run("commit", "-qm", "init");
+    fs.writeFileSync(path.join(dir, "a.js"), "export const a = 2;\n");
+    fs.writeFileSync(path.join(dir, ".env"), "TOKEN=hunter2\n");
+    const text = await reviewRequest(dir, "", 32_000);
+    expect(text).toContain("+export const a = 2;");
+    expect(text).not.toContain("hunter2");
+    expect(await reviewRequest(dir, "HEAD", 32_000)).toContain("since HEAD");
+    await expect(reviewRequest(dir, "--output=/tmp/x", 32_000)).rejects.toThrow("invalid git ref");
   });
 
   test("/agents new writes a template that loads as a custom agent", async () => {
@@ -132,7 +152,8 @@ describe("sub-agents", () => {
     const builtIn = loadAgents(tmpDir(), tmpDir());
     const lean = buildTools(config, { memory: false, agents: builtIn });
     expect(lean.map((t) => t.name)).not.toContain("task");
-    expect(lean.length).toBeLessThanOrEqual(12);
+    expect(lean.map((t) => t.name)).toEqual(expect.arrayContaining(["git_status", "git_diff"])); // ask/plan modes have no bash
+    expect(lean.length).toBeLessThanOrEqual(13);
     expect(lean.find((t) => t.name === "read_file")!.description.length).toBeLessThan(120);
     const custom = [...builtIn, { name: "x", description: "x", prompt: "", source: "project" as const }];
     expect(buildTools(config, { memory: false, agents: custom }).map((t) => t.name)).toContain("task");

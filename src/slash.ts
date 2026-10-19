@@ -3,6 +3,7 @@ import path from "node:path";
 import { createAgentFile } from "./agents.js";
 import { configFilePath, redactedConfig, saveSetting, VERSION, type Config, type Mode } from "./config.js";
 import { toolsForMode } from "./permissions.js";
+import { gitDiff, gitStatus } from "./tools/git.js";
 import type { Session } from "./session.js";
 import { formatDuration, formatTokens, type Ui } from "./ui.js";
 
@@ -43,8 +44,32 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
 export const MODES: Mode[] = ["edit", "auto", "plan", "ask"];
 
-export function reviewPrompt(ref: string): string {
-  return `Review the code changes ${ref ? `since ${ref} (git_diff with ref=${ref})` : "in the working tree (git_status, then git_diff and git_diff with staged=true)"}. Report bugs, security problems, missing tests and risky changes, each with file:line and why it matters. Do not modify files.`;
+/**
+ * The review request with the changes already attached: a small model then reviews straight
+ * away instead of spending a slow turn (or a failed tool call) fetching the diff. Built with
+ * the git tools, so refs are validated and secret files are left out.
+ */
+export async function reviewRequest(cwd: string, ref: string, budgetChars: number): Promise<string> {
+  const ctx = { cwd };
+  const status = await gitStatus.run({}, ctx).catch(() => null);
+  if (status === null) return "Review the code changes in this project. It is not a git repository: ask the user which files to review. Do not modify files.";
+  let diff: string;
+  if (ref) diff = await gitDiff.run({ ref }, ctx);
+  else {
+    // Staged and unstaged together; a repository without commits yet has no HEAD.
+    diff = await gitDiff.run({ ref: "HEAD" }, ctx).catch(async () => [await gitDiff.run({ staged: true }, ctx), await gitDiff.run({}, ctx)].join("\n"));
+  }
+  const limit = Math.max(2_000, Math.floor(budgetChars / 2));
+  const shown = diff.length > limit ? `${diff.slice(0, limit)}\n[diff truncated: ${diff.length - limit} more characters; read the rest with git_diff and a path]` : diff;
+  return `Review the code changes ${ref ? `since ${ref}` : "in the working tree (uncommitted, staged and unstaged)"}. Report bugs, security problems, missing tests and risky changes, each with file:line and why it matters; read files for context where needed. Do not modify files.
+
+git status:
+${status.trim()}
+
+Diff:
+\`\`\`diff
+${shown.trim() || "(no differences)"}
+\`\`\``;
 }
 
 const INIT_PROMPT = `Analyze this codebase and create an AGENTS.md file at the project root (if one exists, improve it instead). It is read by coding agents working here, so keep it short and specific to this project:
@@ -217,7 +242,7 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
       return { kind: "prompt", text: INIT_PROMPT };
 
     case "review":
-      return { kind: "prompt", text: reviewPrompt(arg) };
+      return { kind: "prompt", text: await reviewRequest(config.cwd, arg, config.maxContextChars) };
 
     case "diff": {
       const stat = await git(config.cwd, ["diff", "HEAD", "--stat"]);

@@ -76,6 +76,10 @@ export const gitDiff: Tool = {
   },
   description:
     "Show a diff: uncommitted changes by default, staged changes with staged=true, or changes since a ref (e.g. main, HEAD~3).",
+  lean: {
+    description: "Uncommitted changes as a diff; staged=true for staged ones, ref (e.g. main) for changes since then.",
+    parameters: { type: "object", properties: { ref: { type: "string" }, staged: { type: "boolean" }, path: { type: "string" } } },
+  },
   parameters: {
     type: "object",
     properties: {

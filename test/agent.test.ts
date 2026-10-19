@@ -153,6 +153,27 @@ describe("agent loop", () => {
     expect(messages.at(-1)?.content).toContain("current information");
   });
 
+  test("a reply that only announces an action is nudged to make the call (small models stop there)", async () => {
+    const { tool, calls } = counter("probe");
+    const { agent, model } = setup([{ content: "Checking for failing unit tests." }, { toolCalls: [{ name: "probe", arguments: "{}" }] }, { content: "Fixed: the sum was off by one." }], [tool]);
+    const result = await agent.run("fix the tests", new AbortController().signal);
+    expect(calls).toHaveLength(1);
+    expect(result.text).toBe("Fixed: the sum was off by one.");
+    const nudge = (model.requests[1].messages as Message[]).at(-1);
+    expect(nudge?.role).toBe("user");
+  });
+
+  test("real answers are not nudged, and nudges stop after two", async () => {
+    const { tool } = counter("probe");
+    const answer = setup([{ content: "The latest stable Flutter is 3.47.7 (flutter.dev, checked today)." }], [tool]);
+    await answer.agent.run("latest flutter?", new AbortController().signal);
+    expect(answer.model.requests).toHaveLength(1);
+    const stubborn = setup([{ content: "Let me check." }, { content: "Let me check." }, { content: "Let me check." }, { content: "unused" }], [tool]);
+    const result = await stubborn.agent.run("go", new AbortController().signal);
+    expect(stubborn.model.requests).toHaveLength(3);
+    expect(result.text).toBe("Let me check.");
+  });
+
   test("shows each tool call running, then finished with a summary", async () => {
     const { tool } = counter("probe");
     tool.label = "Probe";

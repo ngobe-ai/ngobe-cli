@@ -102,6 +102,23 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 }
 
 const PARALLEL = 4; // concurrent read-only tool calls
+const MAX_NUDGES = 2;
+const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
+const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then)[,.!]?\s+)?`;
+const INTENT = new RegExp(String.raw`${FILLER}(?:i(?:'ll| will|'m going to| am going to| need to| should)\b|let(?:'s| me| us)\b)`, "i");
+const ACTIVITY = new RegExp(String.raw`${FILLER}(?:checking|looking|reading|running|searching|inspecting|exploring|examining|opening|listing|finding|investigating|analy[sz]ing|fixing|starting)\b`, "i");
+
+/**
+ * Small models often announce an action ("Checking for failing unit tests.") and end the reply
+ * without calling a tool, which would end the run. Short announcements with no question for the
+ * user are treated as "go on". Activity words only count before any tool has run: after that,
+ * "Running the tests shows …" is more likely an answer.
+ */
+export function announcesAction(text: string, toolsUsed: boolean): boolean {
+  const t = text.trim();
+  if (!t || t.length > 300 || t.includes("?") || t.includes("```")) return false;
+  return INTENT.test(t) || (!toolsUsed && ACTIVITY.test(t)) || /(:|\.\.\.|…)$/.test(t);
+}
 const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b/;
 const BUILD_COMMAND = /\b(npm|pnpm|yarn|bun)\s+run\s+build\b|\btsc\b|\b(cargo|go|flutter)\s+build\b|\bmake build\b/;
 
@@ -181,6 +198,7 @@ export class Agent {
     const stats: RunStats = { turns: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, tokensEstimated: false, modelMs: 0, toolMs: 0, durationMs: 0, tests: null };
     const result: RunResult = { outcome: "completed", text: "", stats, calls: [] };
     const repeats = new Map<string, number>();
+    let nudges = 0;
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
     // The hint rides on the user message, not the system prompt: the system prompt and tool list stay
@@ -252,6 +270,12 @@ export class Agent {
             : undefined,
         });
         if (turn.toolCalls.length === 0) {
+          if (nudges < MAX_NUDGES && offered.length && announcesAction(turn.content, stats.toolCalls > 0)) {
+            nudges++;
+            this.messages.push({ role: "user", content: NUDGE });
+            this.d.log?.event("nudge", { run: runId, reply: turn.content.slice(0, 120) });
+            continue;
+          }
           result.text = turn.content;
           break;
         }

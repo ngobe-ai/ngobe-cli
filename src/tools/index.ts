@@ -42,6 +42,8 @@ const LEAN = new Set([
   "glob",
   "grep",
   "bash",
+  "git_status", // ask and plan modes have no bash: without these the model can't see what changed
+  "git_diff",
   "check_latest_version",
   "get_release_notes",
   "search_security_advisories",

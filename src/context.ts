@@ -25,7 +25,7 @@ export const DEFAULT_WORKING_INSTRUCTIONS = `- Find code with glob/grep, then re
 - Edit with edit_file: old_string must match the file exactly, once. write_file only for new files.
 - Keep changes small, in the project's style. Verify with the tests or build (bash); report passed, failed or not run.
 - Tools run the moment you call them and you get their results: never ask the user to run one, never write a call as text.
-- Before acting, say what you're doing in one short sentence (e.g. "Checking how dates are parsed."), not a numbered plan.
+- A reply without a tool call ends your turn: while work remains, include the next tool call in the reply. No numbered plans.
 - When done, answer briefly, without tool calls.`;
 
 const MODE_LINES: Record<Mode, string> = {

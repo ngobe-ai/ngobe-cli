@@ -40,7 +40,7 @@ Ngobe is one Node.js/Bun process with no background services. Everything below r
 
 Every tool declares a JSON Schema, a risk category (`safe`, `network`, `write`, `exec`) that decides which modes it is offered in, an optional per-call approval level (`needs`), a time limit, and how it shows in the chat (a label like `Read`, a target, a live activity such as "Running tests", and a one-line result summary with an optional preview, e.g. a red/green diff).
 
-Profiles (`toolProfile`): **lean** (default) offers `read_file`, `edit_file`, `write_file`, `glob`, `grep`, `bash`, `check_latest_version`, `get_release_notes`, `search_security_advisories`, `fetch_url`, plus `web_search` when a provider is configured and `exit_plan_mode` in plan mode, each with a one-line description; **full** adds `multi_edit`, `bash_output`/`kill_shell` (background commands), `todo_write`, the git tools, `check_installed_version`, `compare_versions`, `search_docs`, `remember` and `task` (sub-agents), with full descriptions. Tool results and the default page sizes of `read_file` and `grep` scale with `maxContextChars`.
+Profiles (`toolProfile`): **lean** (default) offers `read_file`, `edit_file`, `write_file`, `glob`, `grep`, `bash`, `git_status`, `git_diff` (ask and plan modes have no shell), `check_latest_version`, `get_release_notes`, `search_security_advisories`, `fetch_url`, plus `web_search` when a provider is configured and `exit_plan_mode` in plan mode, each with a one-line description; **full** adds `multi_edit`, `bash_output`/`kill_shell` (background commands), `todo_write`, the other git tools, `check_installed_version`, `compare_versions`, `search_docs`, `remember` and `task` (sub-agents), with full descriptions. Tool results and the default page sizes of `read_file` and `grep` scale with `maxContextChars`.
 
 Claude Code conventions: files are read before they are edited or overwritten (and edits refuse a file changed on disk since), `edit_file` replaces one exact match (or all with `replace_all`) and returns the edited lines numbered, `read_file` numbers lines like `cat -n`, and a declined action ends the run and hands the turn back to the user.
 
@@ -103,4 +103,11 @@ Without a terminal, every "ask" is a deny. The shell classifier is a heuristic, 
 | one-shot run, 2 model calls | 0.93 s, 99 MB | ~0.45 s, ~77 MB (plus a tool call and memory) |
 | interactive chat process | not measured | ~110 MB |
 
-Fixed prompt overhead per request: ~2,200 tokens of tool definitions + ~500 tokens of system prompt (stable across turns, so llama.cpp's prompt cache reuses it). Model latency dominates on CPU; measure it on the target with `ngobe doctor` and `ngobe benchmark`.
+Fixed prompt overhead per request (system prompt + tool definitions), counted by the server's tokenizer for Qwen2.5-Coder 7B on a 6-vCPU VPS (Docker Model Runner, CPU only), 2026-10-20:
+
+| tool profile | tools | prompt tokens | first answer from a cold cache |
+|---|---|---|---|
+| lean (default) | 10 | 1,370 | 68 s |
+| full | 25 | 4,097 | 240 s |
+
+The prefix is byte-identical across requests, so llama.cpp's prompt cache reuses it and later turns only process what's new. Model latency dominates on CPU; measure it on the target with `ngobe doctor` and `ngobe benchmark`.

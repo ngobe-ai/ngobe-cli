@@ -24,7 +24,7 @@ export interface Config {
   sshTunnelTarget: string;
   /** native = OpenAI tool calling; text = <tool_call> protocol in the prompt; auto = native, switching to text if refused. */
   toolMode: ToolMode;
-  /** lean: 10 core tools with one-line descriptions (small/CPU models); full: everything (large models). */
+  /** lean: 12 core tools with one-line descriptions (small/CPU models); full: everything (large models). */
   toolProfile: ToolProfile;
   mode: Mode;
   maxTurns: number;

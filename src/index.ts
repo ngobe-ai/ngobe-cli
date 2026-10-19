@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { ConfigError, loadConfig, VERSION, type Command, type Config, type LoadedConfig } from "./config.js";
 import { LineUi } from "./lineUi.js";
-import { MODES, reviewPrompt, runSlash, SLASH_COMMANDS } from "./slash.js";
+import { MODES, reviewRequest, runSlash, SLASH_COMMANDS } from "./slash.js";
 import { isTrusted, trustFolder } from "./trust.js";
 import { yellow, type Ui } from "./ui.js";
 
 /** Agent commands: the prompt template and the mode they force (null = use --mode / config). */
-const AGENT_COMMANDS: Partial<Record<Command, { mode: Config["mode"] | null; prompt: (input: string) => string }>> = {
+const AGENT_COMMANDS: Partial<Record<Command, { mode: Config["mode"] | null; prompt: (input: string, config: Config) => string | Promise<string> }>> = {
   ask: { mode: "ask", prompt: (q) => q },
   plan: { mode: "plan", prompt: (t) => t },
   code: { mode: null, prompt: (t) => t },
@@ -15,7 +15,7 @@ const AGENT_COMMANDS: Partial<Record<Command, { mode: Config["mode"] | null; pro
     prompt: (p) =>
       `Fix this problem: ${p}\n\nReproduce it first if you can (run the failing test or command), make the smallest change that fixes the root cause, then run the relevant tests and report exactly what passed, failed or was not run.`,
   },
-  review: { mode: "ask", prompt: reviewPrompt },
+  review: { mode: "ask", prompt: (ref, config) => reviewRequest(config.cwd, ref, config.maxContextChars) },
 };
 
 async function main() {
@@ -37,7 +37,7 @@ async function runAgent(loaded: LoadedConfig) {
     process.exitCode = 2;
     return;
   }
-  const prompt = spec ? spec.prompt(loaded.prompt) : loaded.prompt;
+  const prompt = spec ? await spec.prompt(loaded.prompt, config) : loaded.prompt;
 
   // Chat screen when interactive; plain line output for one-shot or piped use. The TUI
   // (ink + React) is only loaded when it is used.
