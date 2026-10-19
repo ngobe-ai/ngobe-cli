@@ -23,6 +23,8 @@ interface AgentDeps {
   /** Recorded with each run: the CLI command and the active prompt variant. */
   command?: string;
   variant?: string;
+  /** The project's test command (from its manifests), for "let's run the tests" without a call. */
+  testCommand?: string;
 }
 
 export type Outcome = "completed" | "declined" | "limit" | "cancelled" | "error";
@@ -104,6 +106,16 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 const PARALLEL = 4; // concurrent read-only tool calls
 const MAX_NUDGES = 2;
 const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
+const RUN_TESTS = /\b(?:re-?run|run|execute)\b[^.\n]{0,25}\btests?\b/i;
+const CHANGE_NUDGE =
+  "You haven't changed any file yet. Make the change yourself: read_file the file to change, then edit_file it (don't show the code to the user), then verify it.";
+const CHANGE_REQUEST = /\b(?:fix|add|implement|change|update|refactor|create|remove|delete|rename|write|build|convert|migrate|upgrade|bump|replace|correct|resolve|repair|make)\b/i;
+const QUESTION = /^\s*(?:why|what|where|how|when|which|who|explain|describe)\b/i;
+
+/** The user asked for a change to the project (not an explanation of one). */
+export function wantsChange(request: string): boolean {
+  return CHANGE_REQUEST.test(request) && !QUESTION.test(request);
+}
 const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then|so)[,.!]?\s+)?`;
 const VERBS =
   "run|re-?run|check|look|read|search|find|fix|update|edit|open|start|try|inspect|examine|investigate|create|write|add|implement|locate|use|call|install|verify|test|review|explore|list|modify|change|make|begin|identify|analy[sz]e|debug|see|get|take|navigate|correct|resolve|apply|execute|go ahead";
@@ -125,7 +137,7 @@ export function announcesAction(text: string, toolsUsed: boolean): boolean {
   const ends = [sentences[0], sentences[sentences.length - 1]];
   return ends.some((x) => INTENT.test(x) || (!toolsUsed && ACTIVITY.test(x))) || /(:|\.\.\.|…)$/.test(t);
 }
-const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b/;
+const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b|\bnode --test\b|\bdeno test\b/;
 const BUILD_COMMAND = /\b(npm|pnpm|yarn|bun)\s+run\s+build\b|\btsc\b|\b(cargo|go|flutter)\s+build\b|\bmake build\b/;
 
 export class Agent {
@@ -143,6 +155,8 @@ export class Agent {
   /** When the model last worked for us (a run or a warm-up): the server unloads idle models. */
   private lastActive = 0;
   private warming: Promise<number | null> | null = null;
+  /** The last test command run through bash this session. */
+  private lastTest: string | undefined;
 
   constructor(private d: AgentDeps) {
     this.mode = d.config.mode;
@@ -238,6 +252,8 @@ export class Agent {
     const result: RunResult = { outcome: "completed", text: "", stats, calls: [] };
     const repeats = new Map<string, number>();
     let nudges = 0;
+    let changeNudged = false;
+    const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
     // The hint rides on the user message, not the system prompt: the system prompt and tool list stay
@@ -284,6 +300,12 @@ export class Agent {
           signal,
         );
         ui.endTurn();
+        // "Let's run the tests again." with no call (a small-model habit): run them, with the
+        // command used before in this session, or the project's. Same permission check as ever.
+        if (turn.toolCalls.length === 0 && byName.has("bash") && RUN_TESTS.test(turn.content) && announcesAction(turn.content, true)) {
+          const command = this.lastTest ?? this.d.testCommand;
+          if (command) turn.toolCalls = [{ id: `call_${Date.now()}_tests`, name: "bash", arguments: JSON.stringify({ command }) }];
+        }
         stats.turns++;
         stats.modelMs += turn.totalMs;
         stats.tokensIn += turn.usage.input;
@@ -315,6 +337,16 @@ export class Agent {
             this.d.log?.event("nudge", { run: runId, reply: turn.content.slice(0, 120) });
             continue;
           }
+          // Asked for a change, nothing changed yet: small models describe the fix (or show the
+          // code) instead of making it. One nudge to make it.
+          const changed = result.calls.some((c) => c.ok && this.d.tools.find((t) => t.name === c.name)?.risk === "write");
+          if (changeWanted && !changeNudged && nudges < MAX_NUDGES && !changed && offered.some((t) => t.risk === "write")) {
+            changeNudged = true;
+            nudges++;
+            this.messages.push({ role: "user", content: CHANGE_NUDGE });
+            this.d.log?.event("nudge", { run: runId, kind: "change", reply: turn.content.slice(0, 120) });
+            continue;
+          }
           result.text = turn.content;
           break;
         }
@@ -333,6 +365,8 @@ export class Agent {
           // Every tool_call needs a matching tool message, even when cancelled or on an internal error.
           turn.toolCalls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
         }
+        // Progress resets the nudge budget: two nudges per stall, not per request.
+        if (outputs.some((o) => !o.startsWith("Error:"))) nudges = 0;
         if (signal.aborted) break;
         if (declined) {
           // Like Claude Code: a declined action hands the turn back to the user.
@@ -514,7 +548,10 @@ export class Agent {
     if (!Number.isFinite(code)) return;
     const { memory, config } = this.d;
     const isTest = TEST_COMMAND.test(command);
-    if (isTest) result.stats.tests = code === 0 ? "passed" : "failed";
+    if (isTest) {
+      result.stats.tests = code === 0 ? "passed" : "failed";
+      if (command.length < 200 && !command.includes("\n")) this.lastTest = command;
+    }
     if (!memory?.enabled) return;
     if (code !== 0) {
       const errorLine = output.split("\n").reverse().find((l) => /error|failed|exception|not found|cannot|denied|undefined/i.test(l)) ?? output.split("\n")[1] ?? "";

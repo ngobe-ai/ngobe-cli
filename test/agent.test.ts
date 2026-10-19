@@ -169,6 +169,42 @@ describe("agent loop", () => {
     expect(announcesAction("Done. I will be here if you need more help!", true)).toBe(false);
   });
 
+  test("asked for a change but nothing changed: one nudge to make it, not to show it", async () => {
+    const { tool: edit, calls } = counter("edit_file", "write");
+    const reply = "The bug is in src/sum.js: the loop should start at 0.\n```js\nfor (let i = 0; i < numbers.length; i++) total += numbers[i];\n```";
+    const { agent, model } = setup([{ content: reply }, { toolCalls: [{ name: "edit_file", arguments: "{}" }] }, { content: "Fixed the loop start." }], [edit]);
+    const result = await agent.run("Fix the bug in the source code.", new AbortController().signal);
+    expect(calls).toHaveLength(1);
+    expect(result.text).toBe("Fixed the loop start.");
+    expect((model.requests[1].messages as Message[]).at(-1)?.content).toContain("edit_file");
+  });
+
+  test("'let's run the tests again' runs them: the command used earlier in the request", async () => {
+    const { tool: shell, calls } = counter("bash", "exec", async () => "exit code 0\n2 passed");
+    shell.parameters = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
+    const { tool: edit } = counter("edit_file", "write");
+    const { agent } = setup(
+      [
+        { toolCalls: [{ name: "bash", arguments: '{"command": "node --test"}' }] },
+        { toolCalls: [{ name: "edit_file", arguments: "{}" }] },
+        { content: "Let's run the tests again to see if the issue is resolved." },
+        { content: "All tests pass now." },
+      ],
+      [shell, edit],
+    );
+    const result = await agent.run("Fix the failing test.", new AbortController().signal);
+    expect(calls).toEqual([{ command: "node --test" }, { command: "node --test" }]);
+    expect(result.text).toBe("All tests pass now.");
+    expect(result.stats.tests).toBe("passed");
+  });
+
+  test("questions and read-only requests are answered, not nudged", async () => {
+    const { tool: edit } = counter("edit_file", "write");
+    const ask = setup([{ content: "The loop starts at 1, so it skips the first number." }], [edit]);
+    await ask.agent.run("Why does sum() return 5?", new AbortController().signal);
+    expect(ask.model.requests).toHaveLength(1);
+  });
+
   test("real answers are not nudged, and nudges stop after two", async () => {
     const { tool } = counter("probe");
     const answer = setup([{ content: "The latest stable Flutter is 3.47.7 (flutter.dev, checked today)." }], [tool]);
