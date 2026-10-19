@@ -61,7 +61,7 @@ export async function cmdUpdate(loaded: LoadedConfig): Promise<number> {
       console.log("Update with: brew upgrade ngobe");
       return 0;
     case "source":
-      console.log("Update with: git pull && npm ci && npm run build");
+      console.log("Update with: git pull && bun install && bun run build");
       return 0;
     case "binary":
       await replaceBinary(latest);
@@ -123,7 +123,7 @@ export async function updateNotice(loaded: LoadedConfig): Promise<string | null>
   const info = await latestVersion(REPO, "github", { config: loaded.config });
   const latest = info.stable?.version;
   if (!latest || compareVersions(VERSION, latest) >= 0) return null;
-  const how = { binary: "ngobe update", homebrew: "brew upgrade ngobe", npm: "npm install -g ngobe@latest", source: "git pull && npm run build" }[installMethod()];
+  const how = { binary: "ngobe update", homebrew: "brew upgrade ngobe", npm: "npm install -g ngobe@latest", source: "git pull && bun install && bun run build" }[installMethod()];
   return `ngobe ${latest} is available (you have ${VERSION}); update with: ${how}`;
 }
 

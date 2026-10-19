@@ -10,6 +10,8 @@
 
 Dependabot opens weekly PRs for GitHub Actions and npm dependencies.
 
+Bun does all building and testing. The npm CLI appears only where the npm registry is involved: the CI job that installs the packed tarball the way an npm user would, and `npm publish --provenance` in the release (`bun publish` has no provenance option; provenance signs a link from the package to the workflow run that built it).
+
 ## One-time setup
 
 1. **Make `ngobe-ai/ngobe-cli` public.** Release files, `raw.githubusercontent.com/…/install.sh` and npm provenance all need it. (Settings → General → Danger Zone → Change visibility.)

@@ -46,7 +46,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build:binaries": "bun scripts/build-binaries.ts",
-    "prepack": "npm run build"
+    "prepack": "bun run build"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",

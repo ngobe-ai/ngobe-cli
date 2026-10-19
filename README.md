@@ -14,9 +14,13 @@ What it does beyond a plain chat loop:
     brew install ngobe-ai/tap/ngobe                                                     # Homebrew
     npm install -g ngobe                                                                # Node 22.13+
 
-The install script puts a standalone binary (no Node needed) in `~/.local/bin` after checking its SHA-256; set `NGOBE_VERSION=0.3.0` for a specific version or `NGOBE_INSTALL_DIR` for another directory. Update with `ngobe update` (Homebrew: `brew upgrade ngobe`; npm: `npm install -g ngobe@latest`). Windows: use WSL.
+The install script and Homebrew give you a standalone binary with the Bun runtime built in: no Node, npm or Bun needed. The script checks the SHA-256 and installs to `~/.local/bin`; set `NGOBE_VERSION=0.3.0` for a specific version or `NGOBE_INSTALL_DIR` for another directory. The npm-registry package is for people who already have Node 22.13+ (`bun add -g ngobe` works too, but it still runs on Node). Update with `ngobe update` (Homebrew: `brew upgrade ngobe`; npm: `npm install -g ngobe@latest`). Windows: use WSL.
 
-From source: `git clone https://github.com/ngobe-ai/ngobe-cli && cd ngobe-cli && bun install && bun run dev` (or `npm ci && npm run build && npm link`).
+From source (Bun):
+
+    git clone https://github.com/ngobe-ai/ngobe-cli && cd ngobe-cli && bun install
+    bun run dev                                          # run without building
+    bun scripts/build-binaries.ts darwin-arm64           # or linux-x64 …: your own standalone binary in dist-bin/
 
 ## Quick start
 
@@ -66,7 +70,7 @@ Existing `MUGAMBA_*` environment variables and the `mugamba` command keep workin
 
     bun test                          # unit and integration tests (offline)
     NGOBE_LIVE=1 bun test test/live.test.ts   # also query the real official sources
-    npm run typecheck && npm run build
+    bun run typecheck && bun run build
     bun run build:binaries            # standalone binaries for every platform into dist-bin/
 
 Layout: `src/index.ts` (CLI), `src/agent.ts` (loop), `src/llm.ts` (model gateway), `src/permissions.ts`, `src/tools/` (one file per tool family), `src/web/` (HTTP, search, extraction), `src/releases/` (versions, notes, advisories), `src/memory/` (SQLite store), `src/learn.ts`, `src/bench.ts` + `src/benchData.ts` (evaluation set), `src/doctor.ts`, `src/tui/` (chat screen).
