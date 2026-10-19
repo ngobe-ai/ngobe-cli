@@ -23,6 +23,21 @@ const ecosystemParam = {
 
 export const checkLatestVersion: Tool = {
   name: "check_latest_version",
+  lean: {
+    description: "Latest release of a framework or package, from its official source. Use for any version question.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        ecosystem: { type: "string", description: "npm, pypi, pub, packagist, crates or github (owner/repo); omit for well-known names" },
+        compare_installed: { type: "boolean" },
+      },
+      required: ["name"],
+    },
+  },
+  label: "Latest",
+  activity: (a) => `Checking the latest ${a.name} release`,
+  summarize: (_a, output) => ({ summary: (/latest (.+?) release (\S+)/.exec(output) ?? [])[2] ? `${/^(\S+)/.exec(output)?.[1]} ${/latest (.+?) release (\S+)/.exec(output)![2]}` : output.split("\n")[0].slice(0, 120) }),
   description:
     "Latest stable release of a framework, language or package, from its official release source (not from memory). Also lists newer beta/pre-release channels. Use for any 'latest/current version' question.",
   parameters: {
@@ -66,6 +81,9 @@ function relation(installed: string, latest: string): string {
 
 export const checkInstalledVersion: Tool = {
   name: "check_installed_version",
+  label: "Installed",
+  activity: (a) => `Checking the installed ${a.name}`,
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description:
     "Version installed here: the tool on PATH (flutter --version, node --version, …) and what the project resolves (node_modules, pubspec.lock, composer.lock, FVM pin, pip). Not the latest release.",
   parameters: {
@@ -86,6 +104,9 @@ export const checkInstalledVersion: Tool = {
 
 export const compareVersionsTool: Tool = {
   name: "compare_versions",
+  label: "Compare",
+  target: (a) => `${a.a} vs ${a.b}`,
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description: "Compare two version strings correctly (3.10.0 is newer than 3.9.2; 2.0.0-beta is older than 2.0.0).",
   parameters: {
     type: "object",
@@ -104,6 +125,17 @@ export const compareVersionsTool: Tool = {
 
 export const getReleaseNotes: Tool = {
   name: "get_release_notes",
+  lean: {
+    description: "Official release notes. With since=<version>, lists breaking changes in every release after it.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string" }, ecosystem: { type: "string" }, version: { type: "string" }, since: { type: "string" } },
+      required: ["name"],
+    },
+  },
+  label: "Release notes",
+  activity: (a) => `Reading the ${a.name} release notes`,
+  summarize: (_a, output) => ({ summary: (output.split("\n").find((l) => l.startsWith("## ")) ?? output.split("\n")[1] ?? "").replace(/^## /, "").slice(0, 120) }),
   description:
     "Official release notes for a version (default: latest). With since=<version>, lists every release after it with the lines that mention breaking changes, removals or deprecations — use before upgrades.",
   parameters: {
@@ -139,6 +171,17 @@ export const getReleaseNotes: Tool = {
 
 export const searchSecurityAdvisories: Tool = {
   name: "search_security_advisories",
+  lean: {
+    description: "Known security vulnerabilities of a package (OSV.dev).",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string" }, ecosystem: { type: "string" }, version: { type: "string" } },
+      required: ["name"],
+    },
+  },
+  label: "Advisories",
+  activity: (a) => `Checking security advisories for ${a.name}`,
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description:
     "Known security vulnerabilities for a package (optionally only those affecting a version), from OSV.dev (aggregates GitHub, PyPA, Go, RustSec and more). Supports npm, pypi, pub, packagist, crates, go.",
   parameters: {
@@ -177,6 +220,10 @@ function formatSearch(r: SearchResponse, ctx: ToolContext): string {
 
 export const webSearchTool: Tool = {
   name: "web_search",
+  lean: { description: "Search the web.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+  label: "Web search",
+  activity: (a) => `Searching the web for ${a.query}`,
+  summarize: (_a, output) => ({ summary: `${(output.match(/^\d+\. /gm) ?? []).length} results` }),
   description:
     "Search the web for current information. Official documentation and registries rank first. Use fetch_url to read a result. Cite the URLs you rely on.",
   parameters: {
@@ -199,6 +246,10 @@ export const webSearchTool: Tool = {
 
 export const searchDocsTool: Tool = {
   name: "search_docs",
+  label: "Docs",
+  target: (a) => `${a.technology}: ${a.query}`,
+  activity: (a) => `Searching the ${a.technology} docs`,
+  summarize: (_a, output) => ({ summary: `${(output.match(/^\d+\. /gm) ?? []).length} results` }),
   description:
     "Search a technology's official documentation (e.g. technology=flutter → docs.flutter.dev). Falls back to a local index of official pages fetched earlier when web search is unavailable.",
   parameters: {
@@ -237,6 +288,19 @@ export const searchDocsTool: Tool = {
 
 export const fetchUrl: Tool = {
   name: "fetch_url",
+  lean: {
+    description: "Read a web page as text (offset pages through long ones).",
+    parameters: { type: "object", properties: { url: { type: "string" }, offset: { type: "integer" } }, required: ["url"] },
+  },
+  label: "Fetch",
+  activity: (a) => {
+    try {
+      return `Reading ${new URL(String(a.url)).hostname}`;
+    } catch {
+      return "Fetching a page";
+    }
+  },
+  summarize: (_a, output) => ({ summary: (/^title: (.*)$/m.exec(output)?.[1] ?? /^url: (.*)$/m.exec(output)?.[1] ?? "").slice(0, 120) }),
   description:
     "Fetch a public web page or JSON/text document and return its readable text. Official docs and registries need no approval; other sites ask. Use offset to page through long documents.",
   parameters: {

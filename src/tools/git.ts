@@ -47,6 +47,13 @@ const secretPathNeeds = (a: Args): Need => (typeof a.path === "string" && isSecr
 
 export const gitStatus: Tool = {
   name: "git_status",
+  label: "Git",
+  target: () => "status",
+  activity: () => "Checking git status",
+  summarize: (_a, output) => {
+    const changed = output.split("\n").filter((l) => l && !l.startsWith("##")).length;
+    return { summary: changed ? `${changed} changed file${changed === 1 ? "" : "s"}` : "Clean working tree" };
+  },
   description: "Show the current branch and changed files (git status --short --branch).",
   parameters: { type: "object", properties: {} },
   risk: "safe",
@@ -58,6 +65,15 @@ export const gitStatus: Tool = {
 
 export const gitDiff: Tool = {
   name: "git_diff",
+  label: "Git",
+  target: (a) => `diff${a.staged ? " --staged" : ""}${a.ref ? ` ${a.ref}` : ""}${a.path ? ` ${a.path}` : ""}`,
+  activity: () => "Reading the diff",
+  summarize: (_a, output) => {
+    const files = (output.match(/^diff --git /gm) ?? []).length;
+    const add = (output.match(/^\+(?!\+\+)/gm) ?? []).length;
+    const del = (output.match(/^-(?!--)/gm) ?? []).length;
+    return { summary: files ? `${files} file${files === 1 ? "" : "s"} · +${add} −${del}` : "No differences" };
+  },
   description:
     "Show a diff: uncommitted changes by default, staged changes with staged=true, or changes since a ref (e.g. main, HEAD~3).",
   parameters: {
@@ -83,6 +99,10 @@ export const gitDiff: Tool = {
 
 export const gitLog: Tool = {
   name: "git_log",
+  label: "Git",
+  target: (a) => `log${a.ref ? ` ${a.ref}` : ""}${a.path ? ` ${a.path}` : ""}`,
+  activity: () => "Reading the history",
+  summarize: (_a, output) => ({ summary: `${output.split("\n").filter(Boolean).length} commits` }),
   description: "Show recent commits (one line each), optionally for a ref or path.",
   parameters: {
     type: "object",
@@ -106,6 +126,10 @@ export const gitLog: Tool = {
 
 export const gitBranchCreate: Tool = {
   name: "git_branch_create",
+  label: "Git",
+  target: (a) => `switch -c ${a.name}`,
+  activity: (a) => `Creating branch ${a.name}`,
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description: "Create a new branch from the current HEAD and switch to it.",
   parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   risk: "write",
@@ -122,6 +146,10 @@ export const gitBranchCreate: Tool = {
 
 export const gitCommit: Tool = {
   name: "git_commit",
+  label: "Git",
+  target: (a) => `commit "${String(a.message ?? "").split("\n")[0].slice(0, 50)}"`,
+  activity: () => "Committing",
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description:
     "Commit changes. Stages the given paths first (or commits what is already staged). Never pushes. Always asks the user.",
   parameters: {

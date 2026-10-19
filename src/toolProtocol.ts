@@ -46,8 +46,9 @@ export function parseTextToolCalls(text: string, known?: string[]): { content: s
   return parseLoose(text, known);
 }
 
-// Where models without a proper tool template (e.g. Qwen2.5-Coder) put a JSON call.
-const OPENERS = /<function>|<tools?>|```(?:json|xml|tool_call|javascript|js)?[ \t]*\r?\n?/g;
+// Where models without a proper tool template (e.g. Qwen2.5-Coder) put a JSON call: a tag, a code
+// fence of any language (it has used ```bash), or a line of its own.
+const OPENERS = /<function>|<tools?>|```[\w-]*[ \t]*\r?\n?|(?:^|\n)[ \t]*(?=\{)/g;
 
 /**
  * JSON tool calls wrapped in <function>, <tools>, a fenced code block, or making up the whole
@@ -64,12 +65,15 @@ function parseLoose(text: string, known: string[]): { content: string; calls: Te
     calls.push(call);
     if (first < 0) first = start;
   };
+  const seen = new Set<number>();
   for (const m of text.matchAll(OPENERS)) {
     const after = m.index + m[0].length;
     const brace = text.indexOf("{", after);
-    if (brace >= 0 && text.slice(after, brace).trim() === "") consider(brace, m.index);
+    if (brace < 0 || seen.has(brace) || text.slice(after, brace).trim() !== "") continue;
+    seen.add(brace); // a fenced call is found from both the fence and its own line
+    consider(brace, m.index);
   }
-  if (calls.length === 0 && text.trimStart().startsWith("{")) consider(text.indexOf("{"), 0);
+  // Whatever follows the first call (often made-up results) is not part of the reply.
   return calls.length ? { content: text.slice(0, first).trim(), calls } : { content: text, calls: [] };
 }
 

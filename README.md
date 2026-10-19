@@ -56,6 +56,28 @@ Modes (`--mode`): `ask` and `plan` are read-only; `edit` (default) asks before w
 
 Existing `MUGAMBA_*` environment variables and the `mugamba` command keep working.
 
+## In the chat
+
+The first time ngobe opens in a folder it asks whether you trust the files there (their `AGENTS.md` and custom agents go into the model's context); trusting a folder covers its subfolders. Type `/` for the command menu:
+
+| Command | What it does |
+|---|---|
+| `/help` | Commands and keys |
+| `/clear` (`/new`) | New conversation: clears the context, the screen and session approvals |
+| `/compact [focus]` | Summarize the conversation to free up context |
+| `/model [n\|name]` | List the server's models, or switch (saved as your default) |
+| `/mode [ask\|plan\|edit\|auto]` | Show or switch the permission mode (or press shift+tab) |
+| `/permissions` | What runs without asking, and what you allowed this session |
+| `/agents [new <name>]` (`/subagents`) | List sub-agents, or create a custom one in `.ngobe/agents/` |
+| `/init` | Write `AGENTS.md`, a guide to the project for the agent |
+| `/review [ref]`, `/diff` | Review uncommitted changes; show them |
+| `/status`, `/context`, `/cost`, `/todos`, `/tools`, `/memory`, `/config` | Session, context window, usage, task list, tools, memory, settings |
+| `/exit` | Quit |
+
+Keys: enter sends, esc interrupts a run, shift+tab cycles the mode, ↑/↓ recall history, PgUp/PgDn (or shift+↑/↓) scroll the transcript.
+
+Sub-agents take one task in a fresh context and return a single report, so the main conversation stays small. Built in: `general-purpose` and `explore` (read-only). Custom agents are markdown files with `name`, `description` and `tools` frontmatter in `.ngobe/agents/` or `~/.config/ngobe/agents/`; Claude Code's `.claude/agents/` files work too. With the default lean tool profile the `task` tool is only offered once you define a custom agent, because every sub-agent re-reads its prompt (slow on a CPU server).
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): components, request flow, design decisions, security model

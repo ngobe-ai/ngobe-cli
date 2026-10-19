@@ -30,13 +30,19 @@ Ngobe is one Node.js/Bun process with no background services. Everything below r
 - Speaks `/v1/chat/completions` with streaming. Retries connection errors, 429 and 5xx through the SDK (`NGOBE_MAX_RETRIES`).
 - Abandons a request after `NGOBE_REQUEST_TIMEOUT` seconds without a streamed chunk (an idle timeout, so long CPU generations are not cut off).
 - Tool calling: native by default. If the endpoint rejects the `tools` parameter (llama.cpp without `--jinja`, models without tool templates), it switches to a text protocol: tools are described in the system prompt and the model writes `<tool_call>` blocks. Both the JSON form and Qwen3-Coder's XML form are parsed; tool-call markup is hidden from the streamed text. Parsed calls go through exactly the same validation as native ones, and a malformed block is reported back, never executed.
+- Models without a tool template (Qwen2.5-Coder) write calls as JSON in prose: in a code fence of any language, in `<function>` tags, or on a line of their own. Those are accepted when the name is a tool on offer; the text from the call on (often made-up results) is dropped, and fences are held back while streaming so the JSON never reaches the screen.
+- The system prompt and tool list are byte-identical between requests (the freshness hint rides on the user message), so llama.cpp reuses its cache of them instead of re-reading thousands of tokens.
 - Falls back to `NGOBE_FALLBACK_MODEL` once when the main model is missing, unreachable or silent.
 - Token usage comes from the server when it reports it, otherwise ~4 characters/token estimates (marked as estimated).
 - `models()` and `probe()` back `ngobe doctor` (served models, latency, whether tool calls are native, text, or unsupported).
 
 ## Tools (`tools/`)
 
-Every tool declares a JSON Schema, a risk category (`safe`, `network`, `write`, `exec`) that decides which modes it is offered in, an optional per-call approval level (`needs`), and a time limit. Tools: `read_file`, `edit_file`, `write_file`, `glob`, `grep` (ripgrep when installed), `bash`, `git_status`, `git_diff`, `git_log`, `git_branch_create`, `git_commit`, `check_latest_version`, `check_installed_version`, `compare_versions`, `get_release_notes`, `search_security_advisories`, `search_docs`, `fetch_url`, `web_search` (when a provider is configured), `remember` (when memory is on).
+Every tool declares a JSON Schema, a risk category (`safe`, `network`, `write`, `exec`) that decides which modes it is offered in, an optional per-call approval level (`needs`), a time limit, and how it shows in the chat (a label like `Read`, a target, a live activity such as "Running tests", and a one-line result summary with an optional preview, e.g. a red/green diff).
+
+Profiles (`toolProfile`): **lean** (default) offers `read_file`, `edit_file`, `write_file`, `glob`, `grep`, `bash`, `check_latest_version`, `get_release_notes`, `search_security_advisories`, `fetch_url`, plus `web_search` when a provider is configured and `exit_plan_mode` in plan mode, each with a one-line description; **full** adds `multi_edit`, `bash_output`/`kill_shell` (background commands), `todo_write`, the git tools, `check_installed_version`, `compare_versions`, `search_docs`, `remember` and `task` (sub-agents), with full descriptions. Tool results and the default page sizes of `read_file` and `grep` scale with `maxContextChars`.
+
+Claude Code conventions: files are read before they are edited or overwritten (and edits refuse a file changed on disk since), `edit_file` replaces one exact match (or all with `replace_all`) and returns the edited lines numbered, `read_file` numbers lines like `cat -n`, and a declined action ends the run and hands the turn back to the user.
 
 Deliberate omissions: no `apply_patch` (exact-match `edit_file` is more reliable for small models), no separate `run_tests`/`run_linter` tools (the project's detected commands are in the system prompt and run through `bash`, which records test outcomes), no `git_push`.
 
@@ -51,13 +57,19 @@ Deliberate omissions: no `apply_patch` (exact-match `edit_file` is more reliable
 - `web/net.ts`: `fetch_url` only fetches public http(s) hosts, re-checking every redirect hop; loopback, private, link-local (cloud metadata) and similar ranges are refused.
 - Official pages fetched with `fetch_url` are indexed in SQLite FTS5 so `search_docs` still works offline, labeled with their fetch time.
 
+## Chat UI (`tui/`, `lineUi.ts`)
+
+The ink screen has an animated banner (`tui/logo.ts`: the letters build up, then a light sweeps across every few seconds, continuously while working; a one-line banner on small terminals), a scrollable transcript (tool calls as `⏺ Label(target)` / `⎿ summary` rows updated in place, replies rendered as markdown), a status line (`✻ Running tests… (34s · 2.8k tokens · esc to interrupt)`), the todo list, and the input with a `/` command menu (`slash.ts`). One clock (`tui/clock.ts`) drives every animation and only ticks while something moves. One-shot runs print the same tool rows and a spinner line in the terminal, and plain text when piped.
+
+Folder trust (`trust.ts`) is asked once per folder, before the project's files are loaded.
+
 ## Permissions (`permissions.ts`)
 
 | | ask / plan | edit | auto |
 |---|---|---|---|
 | read, search, version tools | run | run | run |
 | plain read-only shell (`ls`, `cat file`, `git diff` …) | not offered | run | run |
-| file writes, ordinary commands | not offered | ask (writes can be "always") | run |
+| file writes, ordinary commands | not offered | ask ("always" covers the tool, or for commands the program + subcommand, e.g. `npm test`) | run |
 | dangerous: delete, sudo, git push/commit/reset, installs, migrations, deploys, secrets, writes outside the project | not offered | ask every time | ask every time |
 | fetch of a non-official site | ask | ask | ask |
 | `remember` (memory writes) | not offered | ask (can be "always") | run |

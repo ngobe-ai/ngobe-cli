@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig, type Config } from "../src/config.js";
-import type { Ui } from "../src/ui.js";
+import type { Todo, ToolView } from "../src/types.js";
+import type { Activity, RunSummary, Ui } from "../src/ui.js";
 
 /** A full config with isolated state/cache directories and no search providers. */
 export function testConfig(overrides: Partial<Config> = {}): Config {
@@ -13,7 +14,16 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
 
 /** A Ui that records everything and answers approval prompts with `answer`. */
 export function recordingUi(answer = "n") {
-  const log = { prompts: [] as string[], text: "", tools: [] as string[], notes: [] as string[] };
+  const log = {
+    prompts: [] as string[],
+    text: "",
+    /** Every toolUpdate, in order (a running view, then the same id finished). */
+    views: [] as ToolView[],
+    activities: [] as (Activity | null)[],
+    todos: [] as Todo[][],
+    runs: [] as RunSummary[],
+    notes: [] as string[],
+  };
   const ui: Ui = {
     ask: async () => {
       throw new Error("no input in tests");
@@ -29,7 +39,10 @@ export function recordingUi(answer = "n") {
     info: (t) => log.notes.push(t),
     warn: (t) => log.notes.push(t),
     error: (t) => log.notes.push(t),
-    tool: (s) => log.tools.push(s),
+    toolUpdate: (v) => log.views.push(structuredClone(v)),
+    activity: (a) => log.activities.push(a && { ...a }),
+    todos: (l) => log.todos.push(l),
+    runDone: (s) => log.runs.push(s),
     onInterrupt: () => {},
     close: () => {},
   };

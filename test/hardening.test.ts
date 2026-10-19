@@ -118,7 +118,7 @@ describe("symlinks can't leave the project or unmask secrets", () => {
 describe("git internals and agent memory", () => {
   test("writes under .git need explicit approval", () => {
     expect(writeFile.needs!({ path: ".git/hooks/pre-commit", content: "" })).toBe("explicit");
-    expect(editFile.needs!({ path: ".git/config", old_str: "a", new_str: "b" })).toBe("explicit");
+    expect(editFile.needs!({ path: ".git/config", old_string: "a", new_string: "b" })).toBe("explicit");
   });
 
   test("remember changes state: not offered in ask or plan mode", () => {

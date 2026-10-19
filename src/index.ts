@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-import { ConfigError, loadConfig, type Command, type Config, type LoadedConfig } from "./config.js";
+import { ConfigError, loadConfig, VERSION, type Command, type Config, type LoadedConfig } from "./config.js";
 import { LineUi } from "./lineUi.js";
+import { MODES, reviewPrompt, runSlash, SLASH_COMMANDS } from "./slash.js";
+import { isTrusted, trustFolder } from "./trust.js";
 import { yellow, type Ui } from "./ui.js";
 
 /** Agent commands: the prompt template and the mode they force (null = use --mode / config). */
@@ -13,11 +15,7 @@ const AGENT_COMMANDS: Partial<Record<Command, { mode: Config["mode"] | null; pro
     prompt: (p) =>
       `Fix this problem: ${p}\n\nReproduce it first if you can (run the failing test or command), make the smallest change that fixes the root cause, then run the relevant tests and report exactly what passed, failed or was not run.`,
   },
-  review: {
-    mode: "ask",
-    prompt: (ref) =>
-      `Review the code changes ${ref ? `since ${ref} (git_diff with ref=${ref})` : "in the working tree (git_status, then git_diff and git_diff with staged=true)"}. Report bugs, security problems, missing tests and risky changes, each with file:line and why it matters. Do not modify files.`,
-  },
+  review: { mode: "ask", prompt: reviewPrompt },
 };
 
 async function main() {
@@ -44,10 +42,25 @@ async function runAgent(loaded: LoadedConfig) {
   // Chat screen when interactive; plain line output for one-shot or piped use. The TUI
   // (ink + React) is only loaded when it is used.
   const interactive = !prompt && process.stdin.isTTY === true && process.stdout.isTTY === true;
-  const ui: Ui = interactive ? new (await import("./tui/tui.js")).Tui(config) : new LineUi();
+  const ui: Ui = interactive
+    ? new (await import("./tui/tui.js")).Tui({ ...config, version: VERSION, commands: SLASH_COMMANDS })
+    : new LineUi();
+
+  // Like other coding agents: the first time in a folder, ask whether its files can be trusted
+  // (AGENTS.md and custom agents there go into the model's context). One-shot runs don't ask.
+  if (interactive && ui.trust && !isTrusted(config.cwd, config.stateDir)) {
+    if (!(await ui.trust(config.cwd))) {
+      await ui.close();
+      return;
+    }
+    trustFolder(config.cwd, config.stateDir);
+  }
+
   // Loaded here so --help and direct commands don't pay for the agent and SDK imports.
   const { createSession } = await import("./session.js");
-  const { agent, memory } = await createSession(config, ui, { command: loaded.command ?? (prompt ? "prompt" : "repl") });
+  const session = await createSession(config, ui, { command: loaded.command ?? (prompt ? "prompt" : "repl") });
+  const { agent, memory } = session;
+  ui.onModeCycle?.(() => agent.setMode(MODES[(MODES.indexOf(agent.currentMode) + 1) % MODES.length]));
 
   let controller: AbortController | null = null;
   ui.onInterrupt(() => {
@@ -60,13 +73,12 @@ async function runAgent(loaded: LoadedConfig) {
   const runOnce = async (input: string) => {
     controller = new AbortController();
     try {
+      // An interrupted run says so in its summary line ("Interrupted after 12s").
       const result = await agent.run(input, controller.signal);
-      if (controller.signal.aborted) ui.warn("\nInterrupted."); // cancelled during a tool, so run() returned
       failed = result.outcome !== "completed";
     } catch (err) {
       failed = true;
-      if (controller.signal.aborted) ui.warn("\nInterrupted.");
-      else ui.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
+      if (!controller.signal.aborted) ui.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       controller = null;
     }
@@ -89,23 +101,30 @@ async function runAgent(loaded: LoadedConfig) {
       break; // input closed
     }
     if (!input) continue;
-    if (input === "/exit" || input === "/quit") break;
-    if (input === "/clear") {
-      agent.reset();
-      ui.info("Conversation cleared.");
-      continue;
-    }
-    if (input === "/help") {
-      ui.info(
-        [
-          "/clear  reset the conversation",
-          "/exit   quit (Ctrl+C at an empty prompt also quits)",
-          "",
-          `mode: ${config.mode} (start with --mode ask|plan|edit|auto to change)`,
-          "enter send · paste for multi-line input",
-          "up/down recall history · PgUp/PgDn scroll the transcript",
-        ].join("\n"),
-      );
+    // "/…" is a command, except paths like /usr/bin/foo pasted as a message.
+    if (/^\/[a-z-]+(\s|$)/i.test(input)) {
+      const result = await runSlash(input, {
+        config,
+        session,
+        ui,
+        abortable: async (fn) => {
+          controller = new AbortController();
+          try {
+            return await fn(controller.signal);
+          } catch (err) {
+            if (!controller.signal.aborted) throw err;
+            ui.warn("Interrupted.");
+            return undefined;
+          } finally {
+            controller = null;
+          }
+        },
+      }).catch((err) => {
+        ui.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        return { kind: "done" as const };
+      });
+      if (result.kind === "exit") break;
+      if (result.kind === "prompt") await runOnce(result.text);
       continue;
     }
     await runOnce(input);

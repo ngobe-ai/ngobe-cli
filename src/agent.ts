@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
-import type { Config } from "./config.js";
+import type { Config, Mode } from "./config.js";
 import { FRESHNESS_HINT, historySize, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
-import type { Args, FileTracker, Message, Tool, ToolContext } from "./types.js";
-import { printable, type Ui } from "./ui.js";
+import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
+import type { AgentDef } from "./agents.js";
+import { printable, type Activity, type Ui } from "./ui.js";
 
 interface AgentDeps {
   config: Config;
@@ -15,7 +16,8 @@ interface AgentDeps {
   tools: Tool[];
   ui: Ui;
   perms: Permissions;
-  systemPrompt: string;
+  /** A function of the mode, so an approved plan (exit_plan_mode) gets a matching prompt. */
+  systemPrompt: string | ((mode: Mode) => string);
   memory?: Memory | null;
   log?: AuditLog;
   /** Recorded with each run: the CLI command and the active prompt variant. */
@@ -23,7 +25,25 @@ interface AgentDeps {
   variant?: string;
 }
 
-export type Outcome = "completed" | "limit" | "cancelled" | "error";
+export type Outcome = "completed" | "declined" | "limit" | "cancelled" | "error";
+
+/** Totals for the whole session (/cost). */
+export interface SessionUsage {
+  runs: number;
+  tokensIn: number;
+  tokensOut: number;
+  toolCalls: number;
+  ms: number;
+}
+
+/** Where the context budget goes (/context), in characters. */
+export interface ContextUsage {
+  system: number;
+  tools: number;
+  history: number;
+  summary: number;
+  budget: number;
+}
 
 export interface RunStats {
   turns: number;
@@ -69,6 +89,18 @@ interface Prepared {
   failure?: ToolFailure;
 }
 
+/** How a tool call is labelled in the transcript: Read(src/a.ts). */
+function viewOf(p: Prepared): Pick<ToolView, "id" | "label" | "target"> {
+  const args = p.args ?? {};
+  const first = Object.values(args).find((v) => typeof v === "string") as string | undefined;
+  const target = p.tool?.target ? p.tool.target(args) : (first ?? "");
+  return { id: p.call.id, label: p.tool?.label ?? p.call.name, target: printable(target.split("\n")[0].slice(0, 120)) };
+}
+
+function defaultSummary(output: string): { summary: string; preview?: PreviewLine[] } {
+  return { summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "Done" };
+}
+
 const PARALLEL = 4; // concurrent read-only tool calls
 const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b/;
 const BUILD_COMMAND = /\b(npm|pnpm|yarn|bun)\s+run\s+build\b|\btsc\b|\b(cargo|go|flutter)\s+build\b|\bmake build\b/;
@@ -79,13 +111,66 @@ export class Agent {
   private summary = "";
   private files: FileTracker = new Map();
   private searchResults = new Set<string>();
+  private todoList: Todo[] = [];
+  /** Starts as configured; an approved plan (exit_plan_mode) switches it. */
+  private mode: Mode;
+  /** Status line state for the current run. */
+  private status = { label: "", since: 0, tokens: 0 };
+  readonly usage: SessionUsage = { runs: 0, tokensIn: 0, tokensOut: 0, toolCalls: 0, ms: 0 };
 
-  constructor(private d: AgentDeps) {}
+  constructor(private d: AgentDeps) {
+    this.mode = d.config.mode;
+  }
 
   reset() {
     this.messages = [];
     this.summary = "";
     this.files.clear();
+    this.todoList = [];
+    this.d.ui.todos([]);
+  }
+
+  get currentMode(): Mode {
+    return this.mode;
+  }
+
+  get todos(): readonly Todo[] {
+    return this.todoList;
+  }
+
+  /** Switch the permission mode (Shift+Tab, /mode, an approved plan). */
+  setMode(mode: Mode): void {
+    this.mode = mode;
+    this.d.perms.setMode(mode);
+    this.d.ui.modeChanged?.(mode);
+  }
+
+  private systemFor(mode: Mode): string {
+    return typeof this.d.systemPrompt === "function" ? this.d.systemPrompt(mode) : this.d.systemPrompt;
+  }
+
+  contextUsage(): ContextUsage {
+    const offered = toolsForMode(this.d.tools, this.mode);
+    return {
+      system: this.systemFor(this.mode).length,
+      tools: JSON.stringify(offered.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length,
+      history: historySize(this.messages),
+      summary: this.summary.length,
+      budget: this.d.config.maxContextChars,
+    };
+  }
+
+  /** /compact: summarize the conversation so far and continue from the summary. */
+  async compactNow(signal: AbortSignal, focus = ""): Promise<boolean> {
+    if (!this.messages.length) return false;
+    await this.compact(signal, { force: true, focus });
+    return true;
+  }
+
+  private show(label: string, tokens?: number): void {
+    if (label) this.status.label = label;
+    if (tokens !== undefined) this.status.tokens = tokens;
+    this.d.ui.activity({ ...this.status });
   }
 
   /** One user request: loop model -> tools -> model until the model answers without tool calls. */
@@ -95,12 +180,13 @@ export class Agent {
     const started = Date.now();
     const stats: RunStats = { turns: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, tokensEstimated: false, modelMs: 0, toolMs: 0, durationMs: 0, tests: null };
     const result: RunResult = { outcome: "completed", text: "", stats, calls: [] };
-    const offered = toolsForMode(this.d.tools, config.mode);
-    const byName = new Map(offered.map((t) => [t.name, t]));
     const repeats = new Map<string, number>();
     const fresh = needsFreshInfo(userInput);
-    this.d.log?.event("run_start", { run: runId, mode: config.mode, model: config.model, chars: userInput.length, fresh });
-    this.messages.push({ role: "user", content: userInput });
+    this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
+    // The hint rides on the user message, not the system prompt: the system prompt and tool list stay
+    // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
+    this.messages.push({ role: "user", content: fresh ? `${userInput}\n\n(${FRESHNESS_HINT})` : userInput });
+    this.status = { label: "Thinking", since: started, tokens: 0 };
 
     try {
       for (;;) {
@@ -115,9 +201,12 @@ export class Agent {
           break;
         }
         trimHistory(this.messages, config.maxContextChars);
+        this.show("Thinking");
         await this.compact(signal);
+        const offered = toolsForMode(this.d.tools, this.mode);
+        const byName = new Map(offered.map((t) => [t.name, t]));
 
-        const system = [this.d.systemPrompt, fresh && FRESHNESS_HINT].filter(Boolean).join("\n\n");
+        const system = this.systemFor(this.mode);
         // The summary was written from tool output, so it goes in the conversation, not the system prompt.
         const earlier: Message[] = this.summary
           ? [
@@ -125,13 +214,25 @@ export class Agent {
               { role: "assistant", content: "Understood." },
             ]
           : [];
-        const turn = await llm.chat([{ role: "system", content: system }, ...earlier, ...this.messages], offered, (chunk) => ui.write(chunk), signal);
+        let streamed = 0;
+        const turn = await llm.chat(
+          [{ role: "system", content: system }, ...earlier, ...this.messages],
+          offered,
+          (chunk) => {
+            if (streamed === 0) this.show("Responding");
+            streamed += chunk.length;
+            this.show("", stats.tokensIn + stats.tokensOut + Math.ceil(streamed / 4));
+            ui.write(chunk);
+          },
+          signal,
+        );
         ui.endTurn();
         stats.turns++;
         stats.modelMs += turn.totalMs;
         stats.tokensIn += turn.usage.input;
         stats.tokensOut += turn.usage.output;
         stats.tokensEstimated ||= turn.usage.estimated;
+        this.show("", stats.tokensIn + stats.tokensOut);
         this.d.log?.event("model", {
           run: runId,
           model: turn.model,
@@ -162,13 +263,20 @@ export class Agent {
           break;
         }
         let outputs: string[] = [];
+        let declined = false;
         try {
-          outputs = await this.runCalls(turn.toolCalls, byName, repeats, signal, runId, result);
+          ({ outputs, declined } = await this.runCalls(turn.toolCalls, byName, repeats, signal, runId, result));
         } finally {
           // Every tool_call needs a matching tool message, even when cancelled or on an internal error.
           turn.toolCalls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
         }
         if (signal.aborted) break;
+        if (declined) {
+          // Like Claude Code: a declined action hands the turn back to the user.
+          result.outcome = "declined";
+          ui.info("Declined. Tell ngobe what to do instead.");
+          break;
+        }
       }
       if (signal.aborted) result.outcome = "cancelled";
       return result;
@@ -178,6 +286,13 @@ export class Agent {
       throw err;
     } finally {
       stats.durationMs = Date.now() - started;
+      this.usage.runs++;
+      this.usage.tokensIn += stats.tokensIn;
+      this.usage.tokensOut += stats.tokensOut;
+      this.usage.toolCalls += stats.toolCalls;
+      this.usage.ms += stats.durationMs;
+      ui.activity(null);
+      ui.runDone({ outcome: result.outcome, ms: stats.durationMs, tokens: stats.tokensIn + stats.tokensOut, toolCalls: stats.toolCalls });
       this.record(runId, started, result);
     }
   }
@@ -190,27 +305,35 @@ export class Agent {
     signal: AbortSignal,
     runId: string,
     result: RunResult,
-  ): Promise<string[]> {
+  ): Promise<{ outputs: string[]; declined: boolean }> {
     const prepared = calls.map((c) => this.prepare(c, byName, repeats));
     const quiet = (p: Prepared) => !p.failure && p.tool && (p.tool.risk === "safe" || p.tool.risk === "network") && needOf(p.tool, p.args!) === "none";
     const outputs: string[] = new Array(calls.length);
+    let declined = false;
 
     if (prepared.length > 1 && prepared.every(quiet)) {
-      for (const p of prepared) this.d.ui.tool(printable(p.tool!.describe?.(p.args!) ?? p.tool!.name));
+      for (const p of prepared) this.d.ui.toolUpdate({ ...viewOf(p), state: "running" });
+      this.show(prepared.every((p) => p.tool?.name === "read_file") ? `Reading ${prepared.length} files` : `Running ${prepared.length} tools`);
       let next = 0;
       const worker = async () => {
         while (next < prepared.length) {
           const i = next++;
-          outputs[i] = await this.execute(prepared[i], signal, runId, result, false, repeats);
+          outputs[i] = (await this.execute(prepared[i], signal, runId, result, false, repeats)).output;
         }
       };
       await Promise.all(Array.from({ length: Math.min(PARALLEL, prepared.length) }, worker));
     } else {
       for (let i = 0; i < prepared.length; i++) {
-        outputs[i] = signal.aborted ? "Cancelled by user." : await this.execute(prepared[i], signal, runId, result, true, repeats);
+        if (signal.aborted || declined) {
+          outputs[i] = signal.aborted ? "Cancelled by user." : "Not run: the user declined an earlier action.";
+          continue;
+        }
+        const r = await this.execute(prepared[i], signal, runId, result, true, repeats);
+        outputs[i] = r.output;
+        declined ||= r.declined;
       }
     }
-    return outputs;
+    return { outputs, declined };
   }
 
   private prepare(call: ToolCall, byName: Map<string, Tool>, repeats: Map<string, number>): Prepared {
@@ -226,6 +349,13 @@ export class Agent {
     }
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
       return { call, tool, failure: new ToolFailure("invalid_args", `arguments for ${call.name} must be a JSON object.`) };
+    }
+    for (const [from, to] of Object.entries(tool.aliases ?? {})) {
+      const r = raw as Args;
+      if (r[from] !== undefined && r[to] === undefined) {
+        r[to] = r[from];
+        delete r[from];
+      }
     }
     const { args, errors } = validateArgs(tool.parameters, raw as Args);
     if (errors.length) return { call, tool, failure: new ToolFailure("invalid_args", `invalid arguments for ${call.name}: ${errors.join("; ")}.`) };
@@ -248,25 +378,36 @@ export class Agent {
     }
   }
 
-  private async execute(p: Prepared, signal: AbortSignal, runId: string, result: RunResult, announce: boolean, repeats: Map<string, number>): Promise<string> {
+  private async execute(
+    p: Prepared,
+    signal: AbortSignal,
+    runId: string,
+    result: RunResult,
+    announce: boolean,
+    repeats: Map<string, number>,
+  ): Promise<{ output: string; declined: boolean }> {
     const { ui, perms, config, memory, log } = this.d;
     const started = Date.now();
     const name = p.tool?.name ?? p.call.name;
+    const view = viewOf(p);
     let output: string;
     let failure: ToolFailure | null = p.failure ?? null;
 
     if (!failure) {
       const tool = p.tool!;
       const args = p.args!;
-      if (announce) ui.tool(printable(tool.describe?.(args) ?? tool.name));
-      if (!(await perms.check(tool, args))) failure = new ToolFailure("denied", "the user denied this action.");
+      if (announce) ui.toolUpdate({ ...view, state: "running" });
+      if (!(await perms.check(tool, args))) failure = new ToolFailure("denied", "the user declined this action. Don't retry it; wait for their instructions.");
       else if (signal.aborted) failure = new ToolFailure("cancelled", "cancelled by user."); // Ctrl+C while the prompt was open
+      if (!failure && announce) this.show(tool.activity?.(args) ?? `Running ${tool.label ?? tool.name}`);
     }
     if (failure) {
       output = `Error: ${failure.message}`;
     } else {
       try {
-        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, this.context(s)), signal));
+        // Tool results are re-read on every later turn: keep them within a share of the context budget.
+        const limit = Math.min(20_000, Math.max(2_000, Math.floor(config.maxContextChars / 5)));
+        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, this.context(s)), signal), limit);
       } catch (err) {
         failure = err instanceof ToolFailure ? err : new ToolFailure(signal.aborted ? "cancelled" : "failed", err instanceof Error ? err.message : String(err));
         // Error text goes back to the model so it can correct itself.
@@ -290,7 +431,17 @@ export class Agent {
     if (!failure && p.key && (p.tool?.risk === "write" || p.tool?.risk === "exec")) {
       for (const k of [...repeats.keys()]) if (k !== p.key) repeats.delete(k);
     }
-    return output;
+
+    let shown: { summary: string; preview?: PreviewLine[] };
+    try {
+      shown = failure
+        ? { summary: failure.kind === "denied" ? "Declined" : failure.message.split("\n")[0].slice(0, 160) }
+        : (p.tool?.summarize?.(p.args ?? {}, output, ms) ?? defaultSummary(output));
+    } catch {
+      shown = defaultSummary(output);
+    }
+    ui.toolUpdate({ ...view, state: !failure ? "ok" : failure.kind === "denied" ? "declined" : "error", ...shown });
+    return { output, declined: failure?.kind === "denied" };
   }
 
   /** Learn from shell results: whether tests passed, and which test/build commands work here. */
@@ -318,20 +469,80 @@ export class Agent {
   }
 
   private context(signal: AbortSignal): ToolContext {
-    return { cwd: this.d.config.cwd, signal, config: this.d.config, files: this.files, memory: this.d.memory, searchResults: this.searchResults };
+    const { config, memory, ui, perms } = this.d;
+    return {
+      cwd: config.cwd,
+      signal,
+      config,
+      files: this.files,
+      memory,
+      searchResults: this.searchResults,
+      todos: {
+        list: this.todoList,
+        set: (list) => {
+          this.todoList = list;
+          ui.todos(list);
+        },
+      },
+      confirm: (prompt) => ui.confirm(prompt),
+      setMode: (mode) => {
+        this.setMode(mode);
+        ui.info(`Plan approved: now in ${mode} mode.`);
+      },
+      spawn: (agent, prompt) => this.spawn(agent, prompt, signal),
+    };
+  }
+
+  /**
+   * A sub-agent: same model, permissions and project, a fresh conversation and its own tool set.
+   * Its tool calls show in the transcript under its name; its reply text comes back as the
+   * task's result instead of streaming to the user.
+   */
+  private async spawn(def: AgentDef, prompt: string, signal: AbortSignal): Promise<string> {
+    const parent = this.d.ui;
+    const tag = (s: string) => `${def.name} › ${s}`;
+    const ui: Ui = {
+      ask: () => Promise.reject(new Error("sub-agents cannot ask the user for input")),
+      confirm: (p) => parent.confirm(`[${def.name}] ${p}`),
+      write: () => {},
+      endTurn: () => {},
+      info: (t) => parent.info(tag(t)),
+      warn: (t) => parent.warn(tag(t)),
+      error: (t) => parent.error(tag(t)),
+      toolUpdate: (v) => parent.toolUpdate({ ...v, id: `${def.name}:${v.id}`, label: tag(v.label) }),
+      activity: (a: Activity | null) => a && parent.activity({ ...a, label: tag(a.label) }),
+      todos: () => {},
+      runDone: () => {},
+      onInterrupt: () => {},
+      close: () => {},
+    };
+    const tools = this.d.tools.filter((t) => t.name !== "task" && (!def.tools || def.tools.includes(t.name)));
+    const sub = new Agent({
+      ...this.d,
+      tools,
+      ui,
+      command: `agent:${def.name}`,
+      systemPrompt: (mode) =>
+        `${this.systemFor(mode)}\n\nYou are the "${def.name}" sub-agent, working on one task for the main agent. ${def.prompt}\nYour final reply is all the main agent sees: make it a complete, concise report (with file:line references where useful).`,
+    });
+    sub.mode = this.mode;
+    const result = await sub.run(prompt, signal);
+    this.usage.tokensIn += result.stats.tokensIn;
+    this.usage.tokensOut += result.stats.tokensOut;
+    if (result.outcome === "cancelled") throw new Error("cancelled by user");
+    const report = result.text.trim();
+    return report || `The ${def.name} agent finished (${result.outcome}) without a report.`;
   }
 
   /** When trimming wasn't enough, have the model summarize earlier requests and drop them. */
-  private async compact(signal: AbortSignal): Promise<void> {
+  private async compact(signal: AbortSignal, opts: { force?: boolean; focus?: string } = {}): Promise<void> {
     const { config, llm, log } = this.d;
-    if (historySize(this.messages) <= config.maxContextChars) return;
+    if (!opts.force && historySize(this.messages) <= config.maxContextChars) return;
     // Cut at the latest user request: everything before it is summarized, the current task stays whole.
-    let cut = -1;
-    for (let i = this.messages.length - 1; i > 0; i--) {
-      if (this.messages[i].role === "user") {
-        cut = i;
-        break;
-      }
+    // /compact runs between requests, so it summarizes everything.
+    let cut = opts.force ? this.messages.length : -1;
+    for (let i = this.messages.length - 1; i > 0 && cut < 0; i--) {
+      if (this.messages[i].role === "user") cut = i;
     }
     if (cut <= 0) return;
     const res = await llm.chat(
@@ -339,7 +550,7 @@ export class Agent {
         {
           role: "system",
           content:
-            "Summarize this coding session so it can be continued: the user's goals, decisions made, files changed, commands run and their results, and open problems. Be specific and under 300 words.",
+            `Summarize this coding session so it can be continued: the user's goals, decisions made, files changed, commands run and their results, and open problems. Be specific and under 300 words.${opts.focus ? ` Focus on: ${opts.focus}` : ""}`,
         },
         { role: "user", content: transcript(this.messages.slice(0, cut), Math.floor(config.maxContextChars / 2)) },
       ],
@@ -362,7 +573,7 @@ export class Agent {
         id: runId,
         project: config.cwd,
         command: command ?? "",
-        mode: config.mode,
+        mode: this.mode,
         model: config.model,
         variant: variant ?? "",
         started_at: new Date(started).toISOString(),

@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 export type Mode = "ask" | "plan" | "edit" | "auto";
 export const MODES: readonly Mode[] = ["ask", "plan", "edit", "auto"];
 export type ToolMode = "auto" | "native" | "text";
+export type ToolProfile = "lean" | "full";
 export type SearchProvider = "brave" | "tavily" | "searxng";
 export const SEARCH_PROVIDERS: readonly SearchProvider[] = ["brave", "tavily", "searxng"];
 
@@ -23,6 +24,8 @@ export interface Config {
   sshTunnelTarget: string;
   /** native = OpenAI tool calling; text = <tool_call> protocol in the prompt; auto = native, switching to text if refused. */
   toolMode: ToolMode;
+  /** lean: 10 core tools with one-line descriptions (small/CPU models); full: everything (large models). */
+  toolProfile: ToolProfile;
   mode: Mode;
   maxTurns: number;
   maxToolCalls: number;
@@ -116,6 +119,7 @@ Options:
 
 Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_BASE_URL, NGOBE_API_KEY, NGOBE_MODEL, NGOBE_FALLBACK_MODEL, NGOBE_TOOL_MODE,
+  NGOBE_TOOL_PROFILE (lean | full),
   NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
@@ -272,6 +276,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     sshTunnel: String(setting("SSH_TUNNEL", "sshTunnel").raw ?? ""),
     sshTunnelTarget: String(setting("SSH_TUNNEL_TARGET", "sshTunnelTarget").raw ?? ""),
     toolMode: oneOf<ToolMode>(setting("TOOL_MODE", "toolMode"), ["auto", "native", "text"], "auto"),
+    toolProfile: oneOf<ToolProfile>(setting("TOOL_PROFILE", "toolProfile"), ["lean", "full"], "lean"),
     mode: oneOf<Mode>(setting("MODE", "mode", values.yolo ? "auto" : values.mode), MODES, "edit"),
     maxTurns: int(setting("MAX_TURNS", "maxTurns"), 40),
     maxToolCalls: int(setting("MAX_TOOL_CALLS", "maxToolCalls"), 100),
@@ -312,6 +317,21 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     task: values.task ?? "",
     warnings,
   };
+}
+
+/** Set one key in the user config file (/model saves the choice there), keeping everything else. */
+export function saveSetting(key: string, value: unknown, env: Env = process.env): string {
+  const file = configFilePath(env);
+  let values: Record<string, unknown> = {};
+  try {
+    values = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new ConfigError(`${file} could not be read: ${err instanceof Error ? err.message : err}`);
+  }
+  values[key] = value;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(values, null, 2) + "\n");
+  return file;
 }
 
 /** Config for display: secrets replaced. */

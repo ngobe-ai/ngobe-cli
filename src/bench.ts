@@ -83,7 +83,10 @@ class RecordingUi implements Ui {
   info() {}
   warn() {}
   error() {}
-  tool() {}
+  toolUpdate() {}
+  activity() {}
+  todos() {}
+  runDone() {}
   onInterrupt() {}
   close() {}
 }

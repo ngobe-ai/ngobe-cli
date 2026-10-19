@@ -97,7 +97,14 @@ export function classifyCommand(command: string): { level: CommandClass; reason?
 
 /** Tools offered to the model in a mode: ask and plan never get tools that change things. */
 export function toolsForMode(tools: Tool[], mode: Mode): Tool[] {
-  return mode === "ask" || mode === "plan" ? tools.filter((t) => t.risk === "safe" || t.risk === "network") : tools;
+  return tools.filter(
+    (t) => (!t.modes || t.modes.includes(mode)) && (mode === "edit" || mode === "auto" || t.risk === "safe" || t.risk === "network"),
+  );
+}
+
+/** "npm test", "bun run" … the part of a command that "always" approves (program + subcommand). */
+export function commandPrefix(command: string): string {
+  return command.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
 export function needOf(tool: Tool, args: Args): Need {
@@ -106,11 +113,27 @@ export function needOf(tool: Tool, args: Args): Need {
 
 export class Permissions {
   private always = new Set<string>();
+  /** Command prefixes approved with "always" (bash only, never dangerous commands). */
+  private prefixes = new Set<string>();
 
   constructor(
     private ui: Ui,
     private mode: Mode,
   ) {}
+
+  setMode(mode: Mode): void {
+    this.mode = mode;
+  }
+
+  /** What "always" has approved this session (/permissions). */
+  get approvals(): { tools: string[]; commands: string[] } {
+    return { tools: [...this.always], commands: [...this.prefixes] };
+  }
+
+  revokeAll(): void {
+    this.always.clear();
+    this.prefixes.clear();
+  }
 
   /** Whether a call may run; prompts the user when it needs approval. */
   async check(tool: Tool, args: Args): Promise<boolean> {
@@ -118,6 +141,8 @@ export class Permissions {
     const need = needOf(tool, args);
     if (need === "none") return true;
     if (need === "approval" && (this.mode === "auto" || this.always.has(tool.name))) return true;
+    const command = tool.name === "bash" ? String(args.command ?? "").trim() : "";
+    if (need === "approval" && command && [...this.prefixes].some((p) => command === p || command.startsWith(`${p} `))) return true;
 
     const explicit = need === "explicit";
     const reason = tool.name === "bash" ? classifyCommand(String(args.command ?? "")).reason : undefined;
@@ -125,9 +150,11 @@ export class Permissions {
     const prompt = `${explicit ? "⚠ " : ""}allow ${summary}?${reason ? ` (${reason})` : ""}`;
     const answer = (await this.ui.confirm(prompt)).trim().toLowerCase();
 
-    // "always" is per tool for this session, and never covers shell commands or explicit-only actions.
-    if (answer === "a" && !explicit && tool.risk !== "exec") {
-      this.always.add(tool.name);
+    // "always" lasts for this session: per tool, or for shell commands per program + subcommand
+    // ("npm test"). It never covers explicit-only actions (dangerous commands, secrets, commits).
+    if (answer === "a" && !explicit) {
+      if (tool.name === "bash") this.prefixes.add(commandPrefix(command));
+      else if (tool.risk !== "exec") this.always.add(tool.name);
       return true;
     }
     return answer === "y" || answer === "yes" || answer === "a";

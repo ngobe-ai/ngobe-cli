@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import fg from "fast-glob";
 import type { Tool } from "../types.js";
-import { isInside, reqStr } from "./util.js";
+import { isInside, reqStr, resolveInside } from "./util.js";
 
 const IGNORE = ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/target/**"];
+const MAX = 200;
 
 /**
  * fast-glob happily walks "../" and absolute patterns, so refuse any pattern whose static
@@ -24,18 +27,40 @@ export async function findFiles(pattern: string, cwd: string): Promise<string[]>
 
 export const glob: Tool = {
   name: "glob",
-  description: 'Find files by glob pattern, e.g. "src/**/*.ts". Returns up to 200 paths.',
+  label: "Glob",
+  description: 'Find files by name pattern, e.g. "**/*.ts" or "src/**/test_*.py". Newest files first, up to 200.',
   parameters: {
     type: "object",
-    properties: { pattern: { type: "string" } },
+    properties: {
+      pattern: { type: "string" },
+      path: { type: "string", description: "Directory to search in (default: the project root)" },
+    },
     required: ["pattern"],
   },
+  lean: {
+    description: 'Find files by name pattern, e.g. "src/**/*.ts".',
+    parameters: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] },
+  },
   risk: "safe",
-  describe: (a) => `glob ${a.pattern}`,
+  describe: (a) => `glob ${a.pattern}${a.path ? ` in ${a.path}` : ""}`,
+  target: (a) => `${a.pattern}${a.path ? ` in ${a.path}` : ""}`,
+  activity: (a) => `Finding ${a.pattern}`,
+  summarize(_a, output) {
+    if (output.startsWith("No files")) return { summary: "No files found" };
+    const more = Number(/\[(\d+) more/.exec(output)?.[1] ?? 0);
+    const n = output.split("\n").filter((l) => l && !l.startsWith("[")).length + more;
+    return { summary: `Found ${n} file${n === 1 ? "" : "s"}` };
+  },
   async run(args, ctx) {
-    const files = await findFiles(reqStr(args, "pattern"), ctx.cwd);
+    const pattern = reqStr(args, "pattern");
+    const base = typeof args.path === "string" && args.path ? args.path : ".";
+    const dir = resolveInside(ctx.cwd, base);
+    const files = await findFiles(pattern, dir);
     if (files.length === 0) return "No files matched.";
-    const shown = files.sort().slice(0, 200);
-    return shown.join("\n") + (files.length > 200 ? `\n[${files.length - 200} more not shown]` : "");
+    const rel = (f: string) => path.relative(ctx.cwd, path.join(dir, f));
+    const mtimes = await Promise.all(files.map((f) => fs.stat(path.join(dir, f)).then((s) => s.mtimeMs, () => 0)));
+    const sorted = files.map((f, i) => ({ f: rel(f), t: mtimes[i] })).sort((a, b) => b.t - a.t || a.f.localeCompare(b.f));
+    const shown = sorted.slice(0, MAX).map((x) => x.f);
+    return shown.join("\n") + (files.length > MAX ? `\n[${files.length - MAX} more not shown]` : "");
   },
 };

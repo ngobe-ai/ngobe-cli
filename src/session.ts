@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { Agent } from "./agent.js";
-import type { Config } from "./config.js";
+import path from "node:path";
+import { loadAgents, type AgentDef } from "./agents.js";
+import { configFilePath, type Config, type Mode } from "./config.js";
 import { buildSystemPrompt, loadProjectInstructions } from "./context.js";
 import { LLM } from "./llm.js";
 import { AuditLog } from "./log.js";
@@ -20,6 +22,8 @@ export interface Session {
   log: AuditLog;
   /** Name of the prompt variant in use ("default" when none is promoted). */
   variant: string;
+  agents: AgentDef[];
+  perms: Permissions;
 }
 
 export interface SessionOptions {
@@ -36,7 +40,8 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
   const active = memory?.enabled ? memory.meta("active_variant") : undefined;
   const variant = opts.variant ?? (active ? { name: active, prompt: memory?.variant(active)?.prompt ?? "" } : { name: "default", prompt: "" });
 
-  const tools = buildTools(config, { memory: !!memory?.enabled });
+  const agents = loadAgents(config.cwd, path.dirname(configFilePath()));
+  const tools = buildTools(config, { memory: !!memory?.enabled, agents });
   const [project, instructions] = await Promise.all([detectProject(config.cwd), loadProjectInstructions(config.cwd)]);
 
   let notes: string[] = [];
@@ -55,29 +60,22 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
   const llm = new LLM(config);
   llm.onNotice = (t) => ui.info(t);
   const log = new AuditLog(config.stateDir, crypto.randomUUID().slice(0, 8), config.debug ? (l) => ui.info(l) : null);
-  const systemPrompt = buildSystemPrompt({
-    cwd: config.cwd,
-    mode: config.mode,
-    instructions,
-    project,
-    tools,
-    notes,
-    failures,
-    workingInstructions: variant.prompt || undefined,
-  });
-  log.event("session", { mode: config.mode, model: config.model, tools: tools.length, prompt_chars: systemPrompt.length, variant: variant.name });
+  const systemPrompt = (mode: Mode) =>
+    buildSystemPrompt({ cwd: config.cwd, mode, instructions, project, tools, notes, failures, workingInstructions: variant.prompt || undefined });
+  log.event("session", { mode: config.mode, model: config.model, tools: tools.length, prompt_chars: systemPrompt(config.mode).length, variant: variant.name });
 
+  const perms = new Permissions(ui, config.mode);
   const agent = new Agent({
     config,
     llm,
     tools,
     ui,
-    perms: new Permissions(ui, config.mode),
+    perms,
     systemPrompt,
     memory,
     log,
     command: opts.command,
     variant: variant.name,
   });
-  return { agent, llm, memory, tools, project, log, variant: variant.name };
+  return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms };
 }

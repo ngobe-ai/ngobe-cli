@@ -133,3 +133,29 @@ describe("holding back text-mode tool calls while streaming", () => {
     expect(visibleLength('{"a": 1}', false)).toBe(8);
   });
 });
+
+describe("tool calls a small model writes in prose", () => {
+  const known = ["glob", "read_file", "bash"];
+  const screenshot =
+    "To understand the project, I'll start by exploring its structure:\n\n1. **Project Root**: `/Users/bruno/me/COTE`.\n\n```bash\n" +
+    '{"name": "glob", "arguments": {"pattern": "**/*"}}\n```\n\nPlease review the list of files provided by the `glob` function before proceeding.';
+
+  test("a JSON call in a fence of any language is a call; the prose after it is dropped", () => {
+    const { content, calls } = parseTextToolCalls(screenshot, known);
+    expect(calls).toEqual([{ name: "glob", arguments: '{"pattern":"**/*"}' }]);
+    expect(content).toBe("To understand the project, I'll start by exploring its structure:\n\n1. **Project Root**: `/Users/bruno/me/COTE`.");
+  });
+
+  test("a JSON call on its own line after some prose is a call", () => {
+    const { content, calls } = parseTextToolCalls('Let me look.\n{"name": "read_file", "arguments": {"path": "a.ts"}}', known);
+    expect(calls).toEqual([{ name: "read_file", arguments: '{"path":"a.ts"}' }]);
+    expect(content).toBe("Let me look.");
+  });
+
+  test("ordinary code blocks and unknown names stay text", () => {
+    const shell = "Run this:\n```bash\nnpm test\n```";
+    expect(parseTextToolCalls(shell, known)).toEqual({ content: shell, calls: [] });
+    const other = 'Config:\n```json\n{"name": "my-app", "version": "1.0.0"}\n```';
+    expect(parseTextToolCalls(other, known)).toEqual({ content: other, calls: [] });
+  });
+});

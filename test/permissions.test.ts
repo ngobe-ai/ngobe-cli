@@ -93,15 +93,30 @@ describe("modes and approval levels", () => {
     expect(log.prompts.length).toBe(2);
   });
 
-  test('"always" never covers shell commands or explicit-only actions', async () => {
+  test('"always" on a shell command covers that command only (program + subcommand)', async () => {
     const { ui, log } = recordingUi("a");
     const perms = new Permissions(ui, "edit");
     await perms.check(bash, { command: "npm test" });
-    await perms.check(bash, { command: "npm test" });
+    await perms.check(bash, { command: "npm test -- --watch=false" });
+    expect(log.prompts.length).toBe(1);
+    await perms.check(bash, { command: "npm install left-pad" });
     expect(log.prompts.length).toBe(2);
     await perms.check(writeFile, { path: "a.txt", content: "" });
     await perms.check(writeFile, { path: "b.txt", content: "" });
     expect(log.prompts.length).toBe(3);
+  });
+
+  test('"always" never covers explicit-only actions', async () => {
+    const { ui, log } = recordingUi("a");
+    const perms = new Permissions(ui, "edit");
+    await perms.check(bash, { command: "rm -rf build" });
+    await perms.check(bash, { command: "rm -rf build" });
+    expect(log.prompts.length).toBe(2);
+  });
+
+  test("exit_plan_mode is offered only in plan mode", () => {
+    expect(toolsForMode(coreTools, "plan").map((t) => t.name)).toContain("exit_plan_mode");
+    expect(toolsForMode(coreTools, "edit").map((t) => t.name)).not.toContain("exit_plan_mode");
   });
 
   test("ask and plan modes offer no tools that change things", () => {

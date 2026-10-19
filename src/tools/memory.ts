@@ -6,6 +6,10 @@ const TTL_DAYS: Record<FactKind, number> = { command: 90, convention: 180, versi
 
 export const remember: Tool = {
   name: "remember",
+  label: "Remember",
+  target: (a) => `${a.kind} ${a.key}`,
+  activity: () => "Saving a note for next time",
+  summarize: (_a, output) => ({ summary: output.split("\n").find((l) => l.trim())?.slice(0, 120) ?? "" }),
   description:
     "Save a durable fact about this project for future sessions: a build/test command that worked, a code convention, a framework version (expires after 7 days), or a short note. Never save secrets, file contents or temporary details.",
   parameters: {

@@ -144,11 +144,62 @@ describe("agent loop", () => {
     expect(shellCalls).toEqual([]);
   });
 
-  test("questions about current versions get the freshness hint", async () => {
+  test("questions about current versions get the freshness hint, in the user message", async () => {
     const { agent, model } = setup([{ content: "ok" }], []);
     await agent.run("what is the latest flutter version?", new AbortController().signal);
-    const system = (model.requests[0].messages as Message[])[0].content as string;
-    expect(system).toContain("current information");
+    const messages = model.requests[0].messages as Message[];
+    // The system prompt stays byte-identical so the server can reuse its cached prefix.
+    expect(messages[0].content).toBe("test");
+    expect(messages.at(-1)?.content).toContain("current information");
+  });
+
+  test("shows each tool call running, then finished with a summary", async () => {
+    const { tool } = counter("probe");
+    tool.label = "Probe";
+    tool.summarize = () => ({ summary: "probed" });
+    const { agent, log } = setup([{ toolCalls: [{ name: "probe", arguments: "{}" }] }, { content: "done" }], [tool]);
+    await agent.run("go", new AbortController().signal);
+    expect(log.views.map((v) => [v.label, v.state, v.summary])).toEqual([
+      ["Probe", "running", undefined],
+      ["Probe", "ok", "probed"],
+    ]);
+    expect(log.activities.at(-1)).toBeNull();
+    expect(log.runs).toEqual([expect.objectContaining({ outcome: "completed", toolCalls: 1 })]);
+  });
+
+  test("a declined action ends the run and hands the turn back to the user", async () => {
+    const { tool, calls } = counter("change", "write");
+    const { agent, model, log } = setup([{ toolCalls: [{ name: "change", arguments: "{}" }] }, { content: "never asked" }], [tool], { mode: "edit" }, "n");
+    const result = await agent.run("change it", new AbortController().signal);
+    expect(result.outcome).toBe("declined");
+    expect(calls).toEqual([]);
+    expect(model.requests.length).toBe(1);
+    expect(log.views.at(-1)).toMatchObject({ state: "declined" });
+  });
+
+  test("older argument names are accepted through aliases", async () => {
+    const { tool, calls } = counter("probe");
+    tool.parameters = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
+    tool.aliases = { file_path: "path" };
+    const { agent } = setup([{ toolCalls: [{ name: "probe", arguments: '{"file_path": "a.ts"}' }] }, { content: "ok" }], [tool]);
+    await agent.run("go", new AbortController().signal);
+    expect(calls).toEqual([{ path: "a.ts" }]);
+  });
+
+  test("an approved plan switches the mode and the prompt", async () => {
+    const { tool } = counter("approve");
+    tool.run = async (_a, ctx) => {
+      ctx.setMode!("edit");
+      return "approved";
+    };
+    const model = fakeModel([{ toolCalls: [{ name: "approve", arguments: "{}" }] }, { content: "ok" }]);
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "plan" });
+    const { ui } = recordingUi("y");
+    const agent = new Agent({ config, llm: new LLM(config), tools: [tool], ui, perms: new RealPermissions(ui, "plan"), systemPrompt: (m) => `mode ${m}`, memory: null });
+    await agent.run("plan it", new AbortController().signal);
+    expect((model.requests[0].messages as Message[])[0].content).toBe("mode plan");
+    expect((model.requests[1].messages as Message[])[0].content).toBe("mode edit");
   });
 
   test("records outcomes, failures and a working test command in memory", async () => {

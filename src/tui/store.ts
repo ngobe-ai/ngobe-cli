@@ -1,4 +1,8 @@
-export type EntryKind = "user" | "assistant" | "tool" | "note";
+import type { Mode } from "../config.js";
+import type { Todo, ToolView } from "../types.js";
+import { runDoneLine, type Activity, type RunSummary } from "../ui.js";
+
+export type EntryKind = "user" | "assistant" | "tool" | "note" | "done";
 export type NoteTone = "info" | "warn" | "error";
 
 export interface Entry {
@@ -6,11 +10,20 @@ export interface Entry {
   kind: EntryKind;
   text: string;
   tone?: NoteTone;
+  /** kind "tool": replaced (not mutated) on every update, so memoized rows can compare by reference. */
+  view?: ToolView;
 }
 
 export interface ConfirmRequest {
   prompt: string;
   resolve: (answer: string) => void;
+}
+
+export interface TrustRequest {
+  dir: string;
+  /** 0 = yes, 1 = no */
+  choice: number;
+  resolve: (ok: boolean) => void;
 }
 
 let nextId = 1;
@@ -24,9 +37,13 @@ export class Store {
   entries: Entry[] = [];
   /** Entry currently receiving streamed assistant text. */
   stream: Entry | null = null;
-  /** Short status shown in the header while waiting for the model. */
-  status = "";
+  /** What the agent is doing (the spinner line); null when idle. */
+  activity: Activity | null = null;
+  todos: Todo[] = [];
   confirm: ConfirmRequest | null = null;
+  trust: TrustRequest | null = null;
+  /** Shown in the header; /model changes it. */
+  model = "";
   history: string[] = [];
   exitRequested = false;
   version = 0;
@@ -34,9 +51,12 @@ export class Store {
   private listeners = new Set<() => void>();
   private askWaiter: ((line: string) => void) | null = null;
   private queued: string[] = [];
+  private tools = new Map<string, Entry>();
   private lastEmit = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private static readonly throttleMs = 40;
+
+  constructor(public mode: Mode = "edit") {}
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -83,7 +103,6 @@ export class Store {
       this.start(queued);
       return Promise.resolve(queued);
     }
-    this.status = ""; // idle until the next submit
     this.notify(true);
     return new Promise((resolve) => {
       this.askWaiter = resolve;
@@ -94,11 +113,15 @@ export class Store {
     return this.queued.length;
   }
 
+  get busy() {
+    return this.activity !== null;
+  }
+
   /** Show a request in the transcript as the agent starts on it. */
   private start(text: string) {
     this.finalize();
+    this.tools.clear();
     this.entries.push({ id: nextId++, kind: "user", text });
-    this.status = "thinking…";
     this.notify(true);
   }
 
@@ -108,7 +131,6 @@ export class Store {
       this.entries.push(this.stream);
     }
     this.stream.text += chunk;
-    this.status = "";
     this.notify();
   }
 
@@ -119,35 +141,105 @@ export class Store {
   /** Close the streamed entry (trim the trailing "\n" the agent appends). */
   private finalize() {
     if (!this.stream) return;
-    this.stream.text = this.stream.text.replace(/\n$/, "");
+    this.stream.text = this.stream.text.replace(/\n+$/, "");
+    if (!this.stream.text.trim()) this.entries.splice(this.entries.indexOf(this.stream), 1);
     this.stream = null;
-    this.status = "";
     this.notify(true);
   }
 
-  tool(summary: string) {
+  /** A tool call appears when it starts and is updated in place when it finishes. */
+  toolUpdate(view: ToolView) {
     this.finalize();
-    this.status = "working…"; // until the model streams again (covers the tool run and the next call)
-    this.entries.push({ id: nextId++, kind: "tool", text: summary });
+    const entry = this.tools.get(view.id);
+    if (entry) entry.view = { ...view };
+    else {
+      const created: Entry = { id: nextId++, kind: "tool", text: "", view: { ...view } };
+      this.tools.set(view.id, created);
+      this.entries.push(created);
+    }
+    this.notify(true);
+  }
+
+  setActivity(a: Activity | null) {
+    const changed = (a?.label ?? null) !== (this.activity?.label ?? null);
+    this.activity = a && { ...a };
+    this.notify(changed);
+  }
+
+  setTodos(list: Todo[]) {
+    this.todos = list.map((t) => ({ ...t }));
+    this.notify(true);
+  }
+
+  setMode(mode: Mode) {
+    this.mode = mode;
+    this.notify(true);
+  }
+
+  setModel(model: string) {
+    this.model = model;
+    this.notify(true);
+  }
+
+  // --- folder trust ------------------------------------------------------------
+
+  requestTrust(dir: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.trust = {
+        dir,
+        choice: 0,
+        resolve: (ok) => {
+          this.trust = null;
+          this.notify(true);
+          resolve(ok);
+        },
+      };
+      this.notify(true);
+    });
+  }
+
+  moveTrustChoice(choice: number) {
+    if (!this.trust) return;
+    this.trust.choice = Math.max(0, Math.min(1, choice));
+    this.notify(true);
+  }
+
+  answerTrust(ok: boolean) {
+    this.trust?.resolve(ok);
+  }
+
+  runDone(summary: RunSummary) {
+    this.finalize();
+    this.entries.push({ id: nextId++, kind: "done", text: runDoneLine(summary), tone: summary.outcome === "completed" ? "info" : "warn" });
+    // A finished list stays visible until the next run; an all-done one is cleared.
+    if (this.todos.every((t) => t.status === "completed")) this.todos = [];
     this.notify(true);
   }
 
   note(tone: NoteTone, text: string) {
     this.finalize();
-    this.status = "";
     this.entries.push({ id: nextId++, kind: "note", text, tone });
+    this.notify(true);
+  }
+
+  clear() {
+    this.entries = [];
+    this.tools.clear();
+    this.todos = [];
     this.notify(true);
   }
 
   // --- permission prompts ---------------------------------------------------
 
   requestConfirm(prompt: string): Promise<string> {
+    this.finalize();
     return new Promise<string>((resolve) => {
       this.confirm = {
         prompt,
         resolve: (answer) => {
           this.confirm = null;
-          this.entries.push({ id: nextId++, kind: "note", text: `${prompt} → ${answer}`, tone: "info" });
+          const question = prompt.split("\n")[0];
+          this.entries.push({ id: nextId++, kind: "note", text: `${question} → ${answer || "n"}`, tone: "info" });
           this.notify(true);
           resolve(answer);
         },
