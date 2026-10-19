@@ -58,6 +58,12 @@ for (const target of targets) {
     for (const log of result.logs) console.error(log);
     process.exit(1);
   }
+  if (target.startsWith("darwin")) {
+    // Cross-compiling appends the app to an already-signed runtime, which breaks the signature
+    // (Apple Silicon refuses to run such binaries). Re-sign ad hoc; codesign only exists on macOS.
+    if (process.platform === "darwin") await $`codesign --force --sign - ${path.join(dir, "ngobe")}`.quiet();
+    else console.warn(`warning: ${name} is not re-signed (build it on macOS for a valid signature)`);
+  }
   await $`tar -czf ${path.join(OUT, `${name}.tar.gz`)} -C ${dir} ngobe`;
   const size = fs.statSync(path.join(dir, "ngobe")).size / 1024 ** 2;
   console.log(`built ${name} (${size.toFixed(0)} MB)`);
