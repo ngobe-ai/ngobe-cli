@@ -22,8 +22,9 @@ Mugamba is a minimal coding agent for any OpenAI-compatible endpoint.
     src/context.ts      system prompt, AGENTS.md, output truncation, history trimming
     src/ui.ts           Ui interface + ANSI helpers
     src/lineUi.ts       plain line-based I/O (one-shot / piped)
-    src/tui/            ink chat screen for the interactive REPL
-                        (store.ts transcript state, App.tsx header/body/input, tui.tsx Ui impl)
+    src/tui/            ink chat screen for the interactive REPL (Copilot-style:
+                        full-screen transcript, flat input bar, keybar hints)
+                        store.ts transcript state, App.tsx layout, tui.tsx Ui impl
     src/tools/          one file per tool; register in tools/index.ts
 
 ## Known gaps (build next)

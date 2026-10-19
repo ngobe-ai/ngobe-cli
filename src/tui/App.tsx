@@ -1,7 +1,8 @@
-import {useEffect, useRef, useState, useSyncExternalStore} from "react";
+import os from "node:os";
+import {memo, useEffect, useRef, useState, useSyncExternalStore} from "react";
 import {Box, Text, Spacer, measureElement, useApp, useInput, usePaste, useWindowSize} from "ink";
 import type {DOMElement} from "ink";
-import type {Entry, NoteTone, Store} from "./store.js";
+import type {NoteTone, Store} from "./store.js";
 
 export interface TuiConfig {
   model: string;
@@ -16,8 +17,10 @@ interface Props {
   onInterrupt: () => boolean;
 }
 
-const HEADER_H = 1;
-const HINT_H = 1;
+const CONTEXT_H = 1; // cwd / session row above the input bar
+const KEYBAR_H = 1; // hint row below the input bar
+const BAR_BG = "#1f2a37"; // Copilot-style dark input bar
+const MAX_RENDERED_ENTRIES = 300; // keep long sessions snappy; older ones fall off scrollback
 
 export function App({store, config, onInterrupt}: Props) {
   useSyncExternalStore(store.subscribe, () => store.version);
@@ -42,7 +45,7 @@ export function App({store, config, onInterrupt}: Props) {
     if (input !== inputH) setInputH(input);
   });
 
-  const bodyH = Math.max(1, rows - HEADER_H - HINT_H - inputH);
+  const bodyH = Math.max(1, rows - CONTEXT_H - KEYBAR_H - inputH);
   const maxOffset = Math.max(0, contentH - bodyH);
   const scrolled = !stick && maxOffset > 0;
 
@@ -71,25 +74,6 @@ export function App({store, config, onInterrupt}: Props) {
 
   return (
     <Box flexDirection="column" height={rows}>
-      <Box height={HEADER_H} gap={1}>
-        <Text wrap="truncate-end">
-          <Text bold color="cyan">
-            mugamba
-          </Text>
-          <Text dimColor>
-            {" "}
-            · {config.model} · {config.baseURL}
-          </Text>
-        </Text>
-        <Spacer />
-        <Text wrap="truncate-start">
-          <Text dimColor>{config.cwd}</Text>
-          {config.yolo ? <Text color="yellow"> [yolo]</Text> : null}
-          {store.status ? <Text dimColor> · {store.status}</Text> : null}
-          {scrolled ? <Text color="yellow"> · scrolled, PgDn for latest</Text> : null}
-        </Text>
-      </Box>
-
       <Box
         flexDirection="column"
         flexGrow={1}
@@ -97,10 +81,24 @@ export function App({store, config, onInterrupt}: Props) {
         contentOffsetY={stick ? maxOffset : Math.min(offset, maxOffset)}
       >
         <Box flexDirection="column" flexShrink={0} ref={contentRef}>
-          {store.entries.map((e) => (
-            <EntryView key={e.id} entry={e} />
+          {store.entries.slice(-MAX_RENDERED_ENTRIES).map((e) => (
+            <EntryView key={e.id} kind={e.kind} text={e.text} tone={e.tone} />
           ))}
         </Box>
+      </Box>
+
+      <Box height={CONTEXT_H} paddingLeft={1} gap={1}>
+        <Text dimColor wrap="truncate-end">
+          {tilde(config.cwd)}
+        </Text>
+        <Spacer />
+        <Text wrap="truncate-start">
+          {config.yolo ? <Text color="yellow">[yolo] · </Text> : null}
+          <Text dimColor>{config.model}</Text>
+          {store.status ? <Text dimColor> · {store.status}</Text> : null}
+          {scrolled ? <Text color="yellow"> · scrolled ↑</Text> : null}
+        </Text>
+        <Text dimColor> </Text>
       </Box>
 
       <Box flexShrink={0} ref={inputRef}>
@@ -116,52 +114,62 @@ export function App({store, config, onInterrupt}: Props) {
         />
       </Box>
 
-      <Box height={HINT_H} paddingLeft={1}>
+      <Box height={KEYBAR_H} paddingLeft={1}>
         <Text dimColor>
           {store.confirm
             ? "y allow · n deny · a always (non-shell) · esc deny"
             : "enter send · paste for multi-line · PgUp/PgDn scroll · /help"}
         </Text>
+        <Spacer />
+        <Text dimColor> </Text>
       </Box>
     </Box>
   );
 }
 
+function tilde(p: string): string {
+  const home = os.homedir();
+  return p === home ? "~" : p.startsWith(home + "/") ? "~" + p.slice(home.length) : p;
+}
+
 const NOTE_COLOR: Record<NoteTone, string> = {info: "gray", warn: "yellow", error: "red"};
 
-function EntryView({entry}: {entry: Entry}) {
-  switch (entry.kind) {
-    case "user":
-      return (
-        <Box paddingX={1} gap={1}>
-          <Text bold color="cyan">
-            ❯
-          </Text>
-          <Text>{entry.text}</Text>
-        </Box>
-      );
-    case "assistant":
-      return (
-        <Box paddingX={1}>
-          <Text>{entry.text || " "}</Text>
-        </Box>
-      );
-    case "tool":
-      return (
-        <Box paddingX={1}>
-          <Text color="cyan">
-            • {entry.text}
-          </Text>
-        </Box>
-      );
-    case "note":
-      return (
-        <Box paddingX={1}>
-          <Text color={NOTE_COLOR[entry.tone ?? "info"]}>{entry.text}</Text>
-        </Box>
-      );
-  }
-}
+const EntryView = memo(
+  function EntryView({kind, text, tone}: {kind: string; text: string; tone?: NoteTone}) {
+    switch (kind) {
+      case "user":
+        return (
+          <Box paddingX={1} gap={1}>
+            <Text color="cyan">●</Text>
+            <Text>{text}</Text>
+          </Box>
+        );
+      case "assistant":
+        return (
+          <Box paddingX={1}>
+            <Text>{text || " "}</Text>
+          </Box>
+        );
+      case "tool":
+        return (
+          <Box paddingX={1} gap={1}>
+            <Text color="cyan">●</Text>
+            <Text dimColor>{text}</Text>
+          </Box>
+        );
+      case "note":
+        return (
+          <Box paddingX={1} gap={1}>
+            <Text color={NOTE_COLOR[tone ?? "info"]}>●</Text>
+            <Text dimColor>{text}</Text>
+          </Box>
+        );
+      default:
+        return null;
+    }
+  },
+  (prev, next) => prev.kind === next.kind && prev.text === next.text && prev.tone === next.tone,
+);
 
 function InputBox({
   store,
@@ -305,11 +313,10 @@ function InputBox({
   const confirm = store.confirm;
   return (
     <Box
-      borderStyle="round"
-      borderColor={confirm ? "yellow" : "gray"}
+      backgroundColor={BAR_BG}
       paddingX={1}
       flexDirection="column"
-      maxHeight={8}
+      maxHeight={6}
       overflowY="hidden"
     >
       {confirm ? (
@@ -317,13 +324,11 @@ function InputBox({
           <Text bold color="yellow">
             ?{" "}
           </Text>
-          {confirm.prompt} <Text dimColor>[y/n/a]</Text>
+          <Text color="white">{confirm.prompt}</Text> <Text dimColor>[y/n/a]</Text>
         </Text>
       ) : (
         <Text>
-          <Text bold color="cyan">
-            ❯{" "}
-          </Text>
+          <Text color="cyan">❯ </Text>
           {lines.map((line, i) => (
             <Text key={i}>
               {i > 0 ? "\n" : ""}
