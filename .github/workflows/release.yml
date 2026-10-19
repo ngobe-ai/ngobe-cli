@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag like v0.3.0 (npm version minor && git push --follow-tags) to publish:
-# standalone binaries + SHA256SUMS on GitHub Releases, the npm package, and the Homebrew formula.
+# standalone binaries + SHA256SUMS on GitHub Releases, then npm and Homebrew (publish.yml).
 on:
   push:
     tags: ["v*"]
@@ -98,65 +98,16 @@ jobs:
           if [ "${{ needs.check.outputs.prerelease }}" = true ]; then args+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" dist-bin/ngobe-*.tar.gz dist-bin/SHA256SUMS install.sh "${args[@]}"
 
-  npm:
-    name: npm publish
+  publish:
+    name: npm and Homebrew
     needs: [check, github]
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+    secrets: inherit
     permissions:
       contents: read
-      id-token: write # npm provenance
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - run: bun install --frozen-lockfile
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN is not set; skipping npm publish (see docs/releasing.md)"
-            exit 0
-          fi
-          tag=latest
-          if [ "${{ needs.check.outputs.prerelease }}" = true ]; then tag=next; fi
-          npm publish --provenance --access public --tag "$tag"
-
-  homebrew:
-    name: Homebrew tap
-    needs: [check, github]
-    if: needs.check.outputs.prerelease == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Update Formula/ngobe.rb in ngobe-ai/homebrew-tap
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap (see docs/releasing.md)"
-            exit 0
-          fi
-          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir dist-bin
-          bun scripts/homebrew-formula.ts "${{ needs.check.outputs.version }}" dist-bin/SHA256SUMS > ngobe.rb
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/ngobe-ai/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          cp ngobe.rb tap/Formula/ngobe.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/ngobe.rb
-          git commit -m "ngobe ${{ needs.check.outputs.version }}"
-          git push
+      id-token: write
 
   verify:
     name: Install from the release (${{ matrix.os }})

@@ -5,7 +5,8 @@
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | push to `main`, every pull request, and before each release | Typecheck, `bun test`, build, Node smoke test (Ubuntu and macOS); `npm pack` installed globally on Node 22 and 24; a Linux binary built, smoke-tested and installed through `install.sh` from a local mirror; ShellCheck on `install.sh` |
-| `release.yml` | pushing a tag `v*` | Checks the tag matches `package.json`, runs CI, builds each binary on its own platform and runs it, creates the GitHub Release (archives, `SHA256SUMS`, `install.sh`), publishes to npm with provenance, updates the Homebrew tap, then installs the release with `curl … \| sh` on Ubuntu and macOS |
+| `release.yml` | pushing a tag `v*` | Checks the tag matches `package.json`, runs CI, builds each binary on its own platform, runs it and verifies its signature, creates the GitHub Release (archives, `SHA256SUMS`, `install.sh`), runs `publish.yml`, then installs the release with `curl … \| sh` on Ubuntu and macOS |
+| `publish.yml` | called by the release, or by hand: `gh workflow run publish.yml -f version=0.2.0` | Publishes an existing release to npm (with provenance) and updates `Formula/ngobe.rb` in `ngobe-ai/homebrew-tap`. Skips whatever is already published, so it's safe to re-run, e.g. after adding a secret |
 | `live.yml` | daily, or by hand | The live tests against the official version, release-note and advisory endpoints, which can change format without notice |
 
 Dependabot opens weekly PRs for GitHub Actions and npm dependencies.
@@ -14,10 +15,11 @@ Bun does all building and testing. The npm CLI appears only where the npm regist
 
 ## One-time setup
 
-1. **Make `ngobe-ai/ngobe-cli` public.** Release files, `raw.githubusercontent.com/…/install.sh` and npm provenance all need it. (Settings → General → Danger Zone → Change visibility.)
-2. **npm:** create an npm account or org that will own `ngobe` (the name was free on 2026-10-19), then a granular access token with publish rights. Add it as the repository secret `NPM_TOKEN`. Without it, the release skips npm with a warning. Once the package exists you can switch to npm trusted publishing (OIDC) and delete the token.
-3. **Homebrew:** create the public repository `ngobe-ai/homebrew-tap` (a README is enough; the workflow creates `Formula/ngobe.rb`). Create a fine-grained token with Contents read/write on that repository only, and add it as the secret `HOMEBREW_TAP_TOKEN`. Without it, the release skips Homebrew with a warning.
-4. **Actions settings:** the release job uses the built-in `GITHUB_TOKEN` with `contents: write` (declared in the workflow), so no extra secret is needed for GitHub Releases. Linux arm64 builds use GitHub's `ubuntu-24.04-arm` runners, which are free for public repositories.
+1. **Make `ngobe-ai/ngobe-cli` public** (done 2026-10-19). Release files, `raw.githubusercontent.com/…/install.sh` and npm provenance all need it.
+2. **npm:** log in (`npm login`), then on npmjs.com → Access Tokens → Generate New Token → Granular: "Read and write" for packages (all packages until `ngobe` exists, then just `ngobe`), and allow it to bypass two-factor authentication so CI can publish. Store it: `gh secret set NPM_TOKEN --repo ngobe-ai/ngobe-cli` (paste when asked). Without it, publishing skips npm with a warning. Write tokens expire (90 days at most), so renew it, or after the first publish switch to npm trusted publishing (OIDC, no token).
+3. **Homebrew:** the public tap `ngobe-ai/homebrew-tap` exists (created 2026-10-19). The `ngobe-ai` organisation has deploy keys turned off, so the workflow pushes with a token: on GitHub → Settings → Developer settings → Fine-grained tokens → resource owner `ngobe-ai`, repository access "Only select repositories: homebrew-tap", permission Contents: Read and write. Store it: `gh secret set HOMEBREW_TAP_TOKEN --repo ngobe-ai/ngobe-cli`. Without it, publishing skips Homebrew with a warning.
+4. After adding either secret, publish the current release to it: `gh workflow run publish.yml -f version=0.2.0`.
+5. **Actions settings:** the release job uses the built-in `GITHUB_TOKEN` with `contents: write` (declared in the workflow), so no extra secret is needed for GitHub Releases. Linux arm64 builds use GitHub's `ubuntu-24.04-arm` runners, which are free for public repositories.
 
 ## Cutting a release
 
