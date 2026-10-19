@@ -104,8 +104,11 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 const PARALLEL = 4; // concurrent read-only tool calls
 const MAX_NUDGES = 2;
 const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
-const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then)[,.!]?\s+)?`;
-const INTENT = new RegExp(String.raw`${FILLER}(?:i(?:'ll| will|'m going to| am going to| need to| should)\b|let(?:'s| me| us)\b)`, "i");
+const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then|so)[,.!]?\s+)?`;
+const VERBS =
+  "run|re-?run|check|look|read|search|find|fix|update|edit|open|start|try|inspect|examine|investigate|create|write|add|implement|locate|use|call|install|verify|test|review|explore|list|modify|change|make|begin|identify|analy[sz]e|debug|see|get|take|navigate|correct|resolve|apply|execute|go ahead";
+// "I'll run …", "Let's locate …" (an action verb, so "Let me know …" and "I will be here …" don't count)
+const INTENT = new RegExp(String.raw`${FILLER}(?:i(?:'ll| will|'m going to| am going to| need to| should)|let(?:'s| me| us))\s+(?:now\s+|first\s+|then\s+|also\s+)?(?:${VERBS})\b`, "i");
 const ACTIVITY = new RegExp(String.raw`${FILLER}(?:checking|looking|reading|running|searching|inspecting|exploring|examining|opening|listing|finding|investigating|analy[sz]ing|fixing|starting)\b`, "i");
 
 /**
@@ -117,7 +120,10 @@ const ACTIVITY = new RegExp(String.raw`${FILLER}(?:checking|looking|reading|runn
 export function announcesAction(text: string, toolsUsed: boolean): boolean {
   const t = text.trim();
   if (!t || t.length > 300 || t.includes("?") || t.includes("```")) return false;
-  return INTENT.test(t) || (!toolsUsed && ACTIVITY.test(t)) || /(:|\.\.\.|…)$/.test(t);
+  // The announcement opens the reply, or closes it ("The sum is off by one. Let's fix it.").
+  const sentences = t.split(/(?<=[.!])\s+/);
+  const ends = [sentences[0], sentences[sentences.length - 1]];
+  return ends.some((x) => INTENT.test(x) || (!toolsUsed && ACTIVITY.test(x))) || /(:|\.\.\.|…)$/.test(t);
 }
 const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b/;
 const BUILD_COMMAND = /\b(npm|pnpm|yarn|bun)\s+run\s+build\b|\btsc\b|\b(cargo|go|flutter)\s+build\b|\bmake build\b/;

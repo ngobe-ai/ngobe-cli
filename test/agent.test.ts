@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { Agent } from "../src/agent.js";
+import { Agent, announcesAction } from "../src/agent.js";
 import type { Config } from "../src/config.js";
 import { trimHistory } from "../src/context.js";
 import { LLM } from "../src/llm.js";
@@ -161,6 +161,12 @@ describe("agent loop", () => {
     expect(result.text).toBe("Fixed: the sum was off by one.");
     const nudge = (model.requests[1].messages as Message[]).at(-1);
     expect(nudge?.role).toBe("user");
+  });
+
+  test("an announcement at the end of a reply counts; 'let me know' does not", () => {
+    expect(announcesAction("The test fails because the sum is 5, not 6. Let's locate the code responsible and fix it.", true)).toBe(true);
+    expect(announcesAction("Fixed the off-by-one in sum.js; all 3 tests pass. Let me know if you need anything else.", true)).toBe(false);
+    expect(announcesAction("Done. I will be here if you need more help!", true)).toBe(false);
   });
 
   test("real answers are not nudged, and nudges stop after two", async () => {
