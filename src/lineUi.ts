@@ -108,7 +108,8 @@ export class LineUi implements Ui {
   toolUpdate(view: ToolView) {
     // Printed once, when finished: parallel calls would otherwise interleave their lines.
     if (view.state === "running") return;
-    this.print(toolLines(view, process.stdout.columns || 100).join("\n"));
+    // A blank line before each call, as in the chat screen.
+    this.print(`${this.tty ? "\n" : ""}${toolLines(view, process.stdout.columns || 100).join("\n")}`);
   }
   todos(_list: Todo[]) {
     // todo_write's own result already shows the list.
