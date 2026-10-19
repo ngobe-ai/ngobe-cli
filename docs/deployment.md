@@ -42,7 +42,13 @@ To use the server's models from your laptop, let Ngobe tunnel over SSH (configur
 
 - Ngobe itself: ~45–110 MB depending on the command.
 - Model: quantized weights plus KV cache. A 7–8B coding model at Q4 (~4.5–5 GiB of weights) leaves room for the KV cache, the OS and Docker. A 14B model at Q4 (~9 GiB) is borderline on 11 GiB; larger models won't fit.
-- Load one model at a time. Use `NGOBE_FALLBACK_MODEL` only for a model that fits alongside, or that the runner swaps in on demand.
+- Load one model at a time. Use `NGOBE_FALLBACK_MODEL` only for a model that fits alongside; on 11 GiB, a 7B and a 3B loaded together plus other services can run the machine out of memory.
+- Give the model only the context Ngobe needs. Docker Model Runner defaults to the model's maximum (32k for Qwen2.5-Coder) with 4 parallel slots, which cost the 7B about 8.9 GiB of RAM here; at 16k it used about 5.3 GiB. `docker model configure --context-size` only lasts until the model unloads (5 idle minutes by default), so make a variant that keeps it:
+
+      docker model package --from <model> --context-size 16384 ngobe/<name>:16k   # no extra disk; shares the weights
+      # then use the API id it gets (e.g. docker.io/ngobe/<name>:16k) as NGOBE_MODEL
+
+  16k comfortably holds Ngobe's ~2,700 tokens of tools and instructions plus `NGOBE_MAX_CONTEXT_CHARS=32000` of history.
 - Size the history to the model's context window (`NGOBE_MAX_CONTEXT_CHARS`, see configuration.md). On CPU, prompt processing time grows with context; smaller windows answer sooner.
 - Raise `NGOBE_REQUEST_TIMEOUT` if `doctor` shows long first-token times.
 
