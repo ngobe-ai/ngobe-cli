@@ -3,6 +3,7 @@ import { ConfigError, loadConfig, VERSION, type Command, type Config, type Loade
 import { LineUi } from "./lineUi.js";
 import { MODES, reviewRequest, runSlash, SLASH_COMMANDS } from "./slash.js";
 import { isTrusted, trustFolder } from "./trust.js";
+import { shouldKeepWarm } from "./warm.js";
 import { yellow, type Ui } from "./ui.js";
 
 /** Agent commands: the prompt template and the mode they force (null = use --mode / config). */
@@ -66,16 +67,25 @@ async function runAgent(loaded: LoadedConfig) {
   ui.onModeCycle?.(() => agent.setMode(MODES[(MODES.indexOf(agent.currentMode) + 1) % MODES.length]));
 
   let controller: AbortController | null = null;
+  let lastUser = Date.now();
   // While the user reads the screen and types, have the server process the fixed prompt prefix
   // (about a minute from cold on a CPU), and again when they start typing after a break: Docker
-  // Model Runner unloads a model after ~5 idle minutes, and its prompt cache with it.
+  // Model Runner unloads a model after ~5 idle minutes, and its prompt cache with it. While they
+  // are around, keep it loaded with the conversation cached (see warm.ts).
   if (!prompt && config.warmup) {
     void agent.warmup().then((ms) => {
       if (ms !== null && ms > 5_000 && agent.usage.runs === 0 && !controller) ui.info(`Model ready (warmed up in ${Math.round(ms / 1000)}s).`);
     });
     ui.onTyping?.(() => {
+      lastUser = Date.now();
       if (!controller && agent.idleFor() > WARM_AFTER_IDLE_MS) void agent.warmup();
     });
+    const keepWarm = setInterval(() => {
+      if (shouldKeepWarm({ idleMs: agent.idleFor(), sinceUserMs: Date.now() - lastUser, busy: controller !== null, keepWarmMinutes: config.keepWarmMinutes })) {
+        void agent.warmup();
+      }
+    }, 30_000);
+    keepWarm.unref();
   }
 
   ui.onInterrupt(() => {
@@ -86,6 +96,7 @@ async function runAgent(loaded: LoadedConfig) {
 
   let failed = false;
   const runOnce = async (input: string) => {
+    lastUser = Date.now();
     controller = new AbortController();
     try {
       // An interrupted run says so in its summary line ("Interrupted after 12s").

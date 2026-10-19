@@ -44,6 +44,8 @@ export interface Config {
   memory: boolean;
   /** Interactive sessions: have the server process the fixed prompt prefix before the first request. */
   warmup: boolean;
+  /** Keep the model loaded and the conversation cached while the user was active this many minutes ago (0 = off). */
+  keepWarmMinutes: number;
   /** Tried in order; the next one is used only when one fails or finds nothing. */
   searchProviders: SearchProvider[];
   braveApiKey: string;
@@ -303,6 +305,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     cacheDir,
     memory: bool(setting("MEMORY", "memory").raw, true),
     warmup: bool(setting("WARMUP", "warmup").raw, true),
+    keepWarmMinutes: int(setting("KEEP_WARM_MINUTES", "keepWarmMinutes"), 30, 0),
     searchProviders: searchProviders(setting("SEARCH_PROVIDERS", "searchProviders"), {
       brave: !!braveApiKey,
       tavily: !!tavilyApiKey,

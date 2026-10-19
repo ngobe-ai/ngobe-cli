@@ -250,6 +250,38 @@ describe("agent loop", () => {
     expect(agent.idleFor()).toBeLessThan(1000);
   });
 
+  test("keep-warm resends the conversation so far, so the next turn only processes the new message", async () => {
+    const { agent, model } = setup([{ content: "Hello! How can I help?" }, { content: "." }, { content: "ok" }], []);
+    await agent.run("hello", new AbortController().signal);
+    await agent.warmup();
+    await agent.run("thanks", new AbortController().signal);
+    const [first, warm, next] = model.requests.map((r) => r.messages as Message[]);
+    expect(warm.slice(0, -1)).toEqual(next.slice(0, warm.length - 1)); // the whole conversation is a prefix of the next request
+    expect(warm.at(-1)).toEqual({ role: "user", content: "hi" });
+    expect(first).toHaveLength(2);
+    expect(warm).toHaveLength(4); // system, "hello", the reply, "hi"
+  });
+
+  test("while the server loads the model the status line says so", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const model = fakeModel([{ content: "." }, { content: "hi" }], async (_body, n) => {
+      if (n === 1) await gate; // the warm-up is slow: a cold start
+      return undefined;
+    });
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "auto" });
+    const { ui, log } = recordingUi("y");
+    const agent = new Agent({ config, llm: new LLM(config), tools: [], ui, perms: new RealPermissions(ui, "auto"), systemPrompt: "test", memory: null });
+    const warm = agent.warmup();
+    const run = agent.run("hello", new AbortController().signal);
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    await Promise.all([warm, run]);
+    const labels = log.activities.filter(Boolean).map((a) => a!.label);
+    expect(labels[0]).toBe("Loading the model on the server");
+  });
+
   test("shows each tool call running, then finished with a summary", async () => {
     const { tool } = counter("probe");
     tool.label = "Probe";

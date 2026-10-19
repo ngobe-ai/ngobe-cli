@@ -14,6 +14,7 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 | `NGOBE_API_KEY` | (env only) | `not-needed` | Key for hosted providers |
 | `NGOBE_MODEL` / `-m` | `model` | `qwen3-coder` | Model id as the endpoint names it (`docker model ls`, `/v1/models`) |
 | `NGOBE_FALLBACK_MODEL` | `fallbackModel` | none | Tried once when the main model is missing, unreachable or silent |
+| `NGOBE_KEEP_WARM_MINUTES` | `keepWarmMinutes` | `30` | While a chat is open and you were active within this many minutes, keep the model loaded and the conversation cached on the server (a one-token request every ~3.5 minutes, before Docker Model Runner's 5-minute unload). After that the server may unload it. `0` turns it off |
 | `NGOBE_TEMPERATURE` | `temperature` | `0.2` | Sampling temperature, 0 to 2. Low keeps a small model's tool calls steady (llama.cpp's own default is 0.8); `default` leaves it to the server. Dropped automatically if the server refuses it |
 | `NGOBE_WARMUP` | `warmup` | `true` | In the chat, have the server process the fixed prompt prefix (system prompt + tools) while you type: at start, and when you start typing after 2 idle minutes (Docker Model Runner unloads idle models after ~5). Costs one short request; set `false` on a metered API |
 | `NGOBE_TOOL_PROFILE` | `toolProfile` | `lean` | `lean`: 12 core tools with one-line descriptions, for small models on a CPU (every definition is re-read on a cold start); `full`: every tool (git, todos, multi-edit, background shells, sub-agents) with full descriptions |

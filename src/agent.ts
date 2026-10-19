@@ -104,6 +104,7 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 }
 
 const PARALLEL = 4; // concurrent read-only tool calls
+const LOADING = "Loading the model on the server";
 const MAX_NUDGES = 2;
 const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
 const RUN_TESTS = /\b(?:re-?run|run|execute)\b[^.\n]{0,25}\btests?\b/i;
@@ -155,6 +156,8 @@ export class Agent {
   /** When the model last worked for us (a run or a warm-up): the server unloads idle models. */
   private lastActive = 0;
   private warming: Promise<number | null> | null = null;
+  /** A run is in progress (the status line belongs to it). */
+  private running = false;
   /** The last test command run through bash this session. */
   private lastTest: string | undefined;
 
@@ -176,8 +179,10 @@ export class Agent {
    * (a warm-up never reports errors: the real request will).
    */
   warmup(signal?: AbortSignal): Promise<number | null> {
+    // The conversation so far plus a throwaway message: the server caches everything before it,
+    // which is exactly the start of the next real request.
     this.warming ??= this.d.llm
-      .warm([{ role: "system", content: this.systemFor(this.mode) }, { role: "user", content: "hi" }], toolsForMode(this.d.tools, this.mode), signal)
+      .warm([...this.conversation(), { role: "user", content: "hi" }], toolsForMode(this.d.tools, this.mode), signal)
       .then(
         (ms) => {
           this.d.log?.event("warmup", { ms });
@@ -191,8 +196,21 @@ export class Agent {
       .finally(() => {
         this.warming = null;
         this.lastActive = Date.now();
+        if (this.running && this.status.label === LOADING) this.show("Thinking");
       });
     return this.warming;
+  }
+
+  /** What every request starts with: the system prompt, the summary of older turns, the history. */
+  private conversation(): Message[] {
+    // The summary was written from tool output, so it goes in the conversation, not the system prompt.
+    const earlier: Message[] = this.summary
+      ? [
+          { role: "user", content: `[Summary of the earlier conversation, for context only]\n${this.summary}` },
+          { role: "assistant", content: "Understood." },
+        ]
+      : [];
+    return [{ role: "system", content: this.systemFor(this.mode) }, ...earlier, ...this.messages];
   }
 
   /** Milliseconds since the model last worked for this session (Infinity if never). */
@@ -260,6 +278,7 @@ export class Agent {
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
     this.messages.push({ role: "user", content: fresh ? `${userInput}\n\n(${FRESHNESS_HINT})` : userInput });
     this.status = { label: "Thinking", since: started, tokens: 0 };
+    this.running = true;
 
     try {
       for (;;) {
@@ -274,22 +293,15 @@ export class Agent {
           break;
         }
         trimHistory(this.messages, config.maxContextChars);
-        this.show("Thinking");
+        // A warm-up still running means a cold start: this request waits behind it.
+        this.show(this.warming ? LOADING : "Thinking");
         await this.compact(signal);
         const offered = toolsForMode(this.d.tools, this.mode);
         const byName = new Map(offered.map((t) => [t.name, t]));
 
-        const system = this.systemFor(this.mode);
-        // The summary was written from tool output, so it goes in the conversation, not the system prompt.
-        const earlier: Message[] = this.summary
-          ? [
-              { role: "user", content: `[Summary of the earlier conversation, for context only]\n${this.summary}` },
-              { role: "assistant", content: "Understood." },
-            ]
-          : [];
         let streamed = 0;
         const turn = await llm.chat(
-          [{ role: "system", content: system }, ...earlier, ...this.messages],
+          this.conversation(),
           offered,
           (chunk) => {
             if (streamed === 0) this.show("Responding");
@@ -383,6 +395,7 @@ export class Agent {
       throw err;
     } finally {
       stats.durationMs = Date.now() - started;
+      this.running = false;
       this.lastActive = Date.now();
       this.usage.runs++;
       this.usage.tokensIn += stats.tokensIn;
