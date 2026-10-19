@@ -55,10 +55,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-      - name: Pack and install globally, as `npm install -g ngobe` would
+      - name: Pack and install globally, as `npm install -g @ngobe-ai/ngobe` would
         run: |
           npm pack --pack-destination "$RUNNER_TEMP"
-          npm install -g --prefix "$RUNNER_TEMP/global" "$RUNNER_TEMP"/ngobe-*.tgz
+          npm install -g --prefix "$RUNNER_TEMP/global" "$RUNNER_TEMP"/*.tgz
           node scripts/smoke-node.mjs "$RUNNER_TEMP/global/bin/ngobe"
           "$RUNNER_TEMP/global/bin/mugamba" --version
 

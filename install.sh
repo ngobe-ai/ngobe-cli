@@ -24,19 +24,19 @@ arch=$(uname -m)
 case "$os" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;
-  *) fail "no prebuilt binary for $os; install with npm instead (Node 22.13+): npm install -g ngobe" ;;
+  *) fail "no prebuilt binary for $os; install with npm instead (Node 22.13+): npm install -g @ngobe-ai/ngobe" ;;
 esac
 case "$arch" in
   x86_64 | amd64) arch=x64 ;;
   arm64 | aarch64) arch=arm64 ;;
-  *) fail "no prebuilt binary for $arch; install with npm instead: npm install -g ngobe" ;;
+  *) fail "no prebuilt binary for $arch; install with npm instead: npm install -g @ngobe-ai/ngobe" ;;
 esac
 # A shell running under Rosetta on Apple Silicon reports x86_64; the native build is better.
 if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ]; then
   arch=arm64
 fi
 if [ "$os" = linux ] && { ldd --version 2>&1 | grep -qi musl || [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ]; }; then
-  fail "musl-based Linux (e.g. Alpine) isn't supported by the prebuilt binaries; install with npm instead: npm install -g ngobe"
+  fail "musl-based Linux (e.g. Alpine) isn't supported by the prebuilt binaries; install with npm instead: npm install -g @ngobe-ai/ngobe"
 fi
 # x64 CPUs without AVX2 (old hardware, some virtual machines) need the baseline build.
 suffix=""

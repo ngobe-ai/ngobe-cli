@@ -62,8 +62,9 @@ jobs:
             exit 0
           fi
           test "$(node -p "require('./package.json').version")" = "$VERSION"
-          if npm view "ngobe@$VERSION" version >/dev/null 2>&1; then
-            echo "ngobe@$VERSION is already on npm"
+          name=$(node -p "require('./package.json').name")
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "$name@$VERSION is already on npm"
             exit 0
           fi
           tag=latest

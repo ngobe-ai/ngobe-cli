@@ -23,7 +23,7 @@ function real(p: string): string {
 export function installMethod(opts: { standalone?: boolean; execPath?: string; script?: string } = {}): InstallMethod {
   const standalone = opts.standalone ?? STANDALONE;
   if (standalone) return /[\\/]Cellar[\\/]ngobe[\\/]/.test(real(opts.execPath ?? process.execPath)) ? "homebrew" : "binary";
-  return /[\\/]node_modules[\\/]ngobe[\\/]/.test(real(opts.script ?? process.argv[1] ?? "")) ? "npm" : "source";
+  return /[\\/]node_modules[\\/]@ngobe-ai[\\/]ngobe[\\/]/.test(real(opts.script ?? process.argv[1] ?? "")) ? "npm" : "source";
 }
 
 /** The release archive for a machine: ngobe-<os>-<arch>.tar.gz (baseline x64 build without AVX2). */
@@ -55,7 +55,7 @@ export async function cmdUpdate(loaded: LoadedConfig): Promise<number> {
   console.log(`${bold(`ngobe ${VERSION} → ${latest}`)} ${dim(`(installed via ${method})`)}`);
   switch (method) {
     case "npm":
-      console.log("Update with: npm install -g ngobe@latest");
+      console.log("Update with: npm install -g @ngobe-ai/ngobe@latest");
       return 0;
     case "homebrew":
       console.log("Update with: brew upgrade ngobe");
@@ -123,7 +123,7 @@ export async function updateNotice(loaded: LoadedConfig): Promise<string | null>
   const info = await latestVersion(REPO, "github", { config: loaded.config });
   const latest = info.stable?.version;
   if (!latest || compareVersions(VERSION, latest) >= 0) return null;
-  const how = { binary: "ngobe update", homebrew: "brew upgrade ngobe", npm: "npm install -g ngobe@latest", source: "git pull && bun install && bun run build" }[installMethod()];
+  const how = { binary: "ngobe update", homebrew: "brew upgrade ngobe", npm: "npm install -g @ngobe-ai/ngobe@latest", source: "git pull && bun install && bun run build" }[installMethod()];
   return `ngobe ${latest} is available (you have ${VERSION}); update with: ${how}`;
 }
 

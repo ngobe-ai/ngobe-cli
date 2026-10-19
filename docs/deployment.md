@@ -11,7 +11,7 @@ The standalone binary needs nothing else. Optional but recommended: `ripgrep` (`
     curl -fsSL https://raw.githubusercontent.com/ngobe-ai/ngobe-cli/main/install.sh | sh
     ngobe --version
 
-The script picks the right build (including the "baseline" x64 build for CPUs or VMs without AVX2), verifies its SHA-256 and installs to `~/.local/bin`. Alternatives: `npm install -g ngobe` (needs Node.js 22.13+), or build your own binary from source with Bun:
+The script picks the right build (including the "baseline" x64 build for CPUs or VMs without AVX2), verifies its SHA-256 and installs to `~/.local/bin`. Alternatives: `npm install -g @ngobe-ai/ngobe` (needs Node.js 22.13+), or build your own binary from source with Bun:
 
     sudo git clone https://github.com/ngobe-ai/ngobe-cli /opt/ngobe-cli && cd /opt/ngobe-cli
     bun install && bun scripts/build-binaries.ts linux-x64
@@ -62,7 +62,7 @@ Version, release-note and advisory lookups reach the official hosts directly (no
     ngobe update        # standalone install; `ngobe doctor` says when one is available
     ngobe doctor
 
-npm installs: `npm install -g ngobe@latest`. Source builds: `cd /opt/ngobe-cli && git pull && bun install && bun scripts/build-binaries.ts linux-x64`, then copy the binary again.
+npm installs: `npm install -g @ngobe-ai/ngobe@latest`. Source builds: `cd /opt/ngobe-cli && git pull && bun install && bun scripts/build-binaries.ts linux-x64`, then copy the binary again.
 
 The memory schema is created with `create table if not exists`; upgrades keep existing data.
 

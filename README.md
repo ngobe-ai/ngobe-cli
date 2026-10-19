@@ -12,9 +12,9 @@ What it does beyond a plain chat loop:
 
     curl -fsSL https://raw.githubusercontent.com/ngobe-ai/ngobe-cli/main/install.sh | sh   # Linux, macOS
     brew install ngobe-ai/tap/ngobe                                                     # Homebrew
-    npm install -g ngobe                                                                # Node 22.13+
+    npm install -g @ngobe-ai/ngobe                                                      # Node 22.13+
 
-The install script and Homebrew give you a standalone binary with the Bun runtime built in: no Node, npm or Bun needed. The script checks the SHA-256 and installs to `~/.local/bin`; set `NGOBE_VERSION=0.3.0` for a specific version or `NGOBE_INSTALL_DIR` for another directory. The npm-registry package is for people who already have Node 22.13+ (`bun add -g ngobe` works too, but it still runs on Node). Update with `ngobe update` (Homebrew: `brew upgrade ngobe`; npm: `npm install -g ngobe@latest`). Windows: use WSL.
+The install script and Homebrew give you a standalone binary with the Bun runtime built in: no Node, npm or Bun needed. The script checks the SHA-256 and installs to `~/.local/bin`; set `NGOBE_VERSION=0.3.0` for a specific version or `NGOBE_INSTALL_DIR` for another directory. The npm-registry package is for people who already have Node 22.13+ (`bun add -g @ngobe-ai/ngobe` works too, but it still runs on Node). Update with `ngobe update` (Homebrew: `brew upgrade ngobe`; npm: `npm install -g @ngobe-ai/ngobe@latest`). Windows: use WSL.
 
 From source (Bun):
 

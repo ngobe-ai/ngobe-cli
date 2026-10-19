@@ -28,7 +28,7 @@ Start with `ngobe doctor`; most problems show up there. `--debug` prints every t
 
 **Install script: "not on your PATH".** Add the printed `export PATH=…` line to your shell profile and open a new shell.
 
-**Install script on Alpine/musl.** The prebuilt binaries need glibc; use `npm install -g ngobe` with Node 22.13+.
+**Install script on Alpine/musl.** The prebuilt binaries need glibc; use `npm install -g @ngobe-ai/ngobe` with Node 22.13+.
 
 **"CPU lacks AVX support" warning on macOS.** You're running the Intel build under Rosetta. Reinstall with the install script from a native (arm64) shell, or `brew reinstall ngobe`; it picks the Apple Silicon build.
 

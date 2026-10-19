@@ -26,7 +26,7 @@ describe("install method", () => {
   });
 
   test("the npm package, or a source checkout", () => {
-    expect(installMethod({ standalone: false, script: "/usr/lib/node_modules/ngobe/dist/index.js" })).toBe("npm");
+    expect(installMethod({ standalone: false, script: "/usr/lib/node_modules/@ngobe-ai/ngobe/dist/index.js" })).toBe("npm");
     expect(installMethod({ standalone: false, script: "/opt/ngobe-cli/dist/index.js" })).toBe("source");
   });
 });
