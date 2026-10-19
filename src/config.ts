@@ -33,6 +33,8 @@ export interface Config {
   maxContextChars: number;
   /** Seconds without a streamed chunk before a model request is abandoned (CPU inference can be slow to start). */
   requestTimeout: number;
+  /** Sampling temperature; undefined = the server's default. Low keeps small models' tool calls steady. */
+  temperature?: number;
   maxRetries: number;
   cwd: string;
   /** Memory database, logs and prompt variants. */
@@ -142,6 +144,15 @@ function envVar(env: Env, name: string): string | undefined {
 interface Setting {
   raw: unknown;
   label: string;
+}
+
+/** 0 to 2; "default" leaves it to the server. */
+function temperature(s: Setting): number | undefined {
+  if (s.raw === undefined || s.raw === null || s.raw === "") return 0.2;
+  if (s.raw === "default") return undefined;
+  const n = Number(s.raw);
+  if (!Number.isFinite(n) || n < 0 || n > 2) throw new ConfigError(`${s.label} must be a number from 0 to 2, or "default" (got "${s.raw}")`);
+  return n;
 }
 
 function int(s: Setting, fallback: number, min = 1): number {
@@ -285,6 +296,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     maxRunSeconds: int(setting("MAX_RUN_SECONDS", "maxRunSeconds"), 1800),
     maxContextChars: int(setting("MAX_CONTEXT_CHARS", "maxContextChars"), 200_000),
     requestTimeout: int(setting("REQUEST_TIMEOUT", "requestTimeout"), 300),
+    temperature: temperature(setting("TEMPERATURE", "temperature")),
     maxRetries: int(setting("MAX_RETRIES", "maxRetries"), 2, 0),
     cwd: process.cwd(),
     stateDir,

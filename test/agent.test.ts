@@ -311,6 +311,40 @@ describe("agent loop", () => {
 });
 
 describe("model gateway", () => {
+  test("requests carry the configured temperature; one the server refuses is dropped", async () => {
+    let refused = false;
+    const model = fakeModel([{ content: "ok" }], (body) => {
+      if (body.temperature !== undefined && !refused) {
+        refused = true;
+        return new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'temperature'" } }), { status: 400 });
+      }
+      return undefined;
+    });
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, temperature: 0.2 });
+    const llm = new LLM(config);
+    const turn = await llm.chat([{ role: "user", content: "hi" }], [], () => {});
+    expect(turn.content).toBe("ok");
+    expect(model.requests.map((r) => r.temperature)).toEqual([0.2, undefined]);
+  });
+
+  test("Bun's 5-minute fetch limit is off: the idle timeout bounds requests", async () => {
+    const seen: unknown[] = [];
+    const real = globalThis.fetch;
+    const model = fakeModel([{ content: "ok" }]);
+    stops.push(model.stop);
+    globalThis.fetch = ((url: RequestInfo, init?: RequestInit) => {
+      seen.push((init as { timeout?: unknown } | undefined)?.timeout);
+      return real(url, init);
+    }) as typeof fetch;
+    try {
+      await new LLM(testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0 })).chat([{ role: "user", content: "hi" }], [], () => {});
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(seen).toContain(false);
+  });
+
   test("a bare JSON tool call is never shown to the user", async () => {
     const { tool, calls } = counter("probe");
     const { agent, log } = setup([{ content: '{"name": "probe", "arguments": {"n": 4}}' }, { content: "Found it." }], [tool]);

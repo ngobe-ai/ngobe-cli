@@ -16,15 +16,19 @@ export function isInside(cwd: string, p: string): boolean {
  */
 export function resolveInside(cwd: string, p: unknown): string {
   if (typeof p !== "string" || !p) throw new Error('argument "path" must be a non-empty string');
-  if (!isInside(cwd, p)) throw new Error(`path is outside the project directory: ${p}`);
+  // Compared with links resolved on both sides: a project opened through a link (macOS /var is
+  // /private/var) is entered by its real path too, and a link inside it can't lead out.
   const abs = path.resolve(cwd, p);
   const real = realPath(abs);
   const root = realPath(cwd);
-  if (!isInside(root, real)) throw new Error(`path is outside the project directory (through a symbolic link): ${p}`);
+  if (!isInside(root, real)) {
+    throw new Error(isInside(cwd, p) ? `path is outside the project directory (through a symbolic link): ${p}` : `path is outside the project directory: ${p}`);
+  }
   if (isSecretPath(path.relative(root, real)) && !isSecretPath(p)) {
     throw new Error(`${p} is a link to a secret file (${path.relative(root, real)}); use that name, which needs explicit approval`);
   }
-  return abs;
+  // One name per file (under the project root as opened), so read-before-edit tracking matches.
+  return isInside(cwd, p) ? abs : path.join(path.resolve(cwd), path.relative(root, real));
 }
 
 /** Real path with links resolved; for a path that doesn't exist yet, its nearest existing parent's. */

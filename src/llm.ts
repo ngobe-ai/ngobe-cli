@@ -50,10 +50,15 @@ export class LLM {
   private tunnel: Promise<string | null> | null = null;
   /** Set once the model makes a native tool call; until then, JSON-looking text is held back while streaming. */
   private nativeToolsSeen = false;
+  private temperature: number | undefined;
 
   constructor(private cfg: Config) {
     // The SDK timeout would cut long streams; the idle timer in attempt() bounds requests instead.
-    this.client = new OpenAI({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, maxRetries: cfg.maxRetries, timeout: 60 * 60_000 });
+    // Bun's fetch gives up after 5 minutes, and a cold prompt on a CPU server can take longer to
+    // start answering: requests are bounded by the idle timer in attempt() alone.
+    const fetchNoLimit = ((url: RequestInfo | URL, init?: RequestInit) => fetch(url, { ...init, timeout: false } as RequestInit)) as typeof fetch;
+    this.client = new OpenAI({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, maxRetries: cfg.maxRetries, timeout: 60 * 60_000, fetch: fetchNoLimit });
+    this.temperature = cfg.temperature;
     this.textTools = cfg.toolMode === "text";
   }
 
@@ -85,6 +90,10 @@ export class LLM {
       if (this.cfg.sshTunnel && err instanceof OpenAI.APIConnectionError) {
         this.tunnel = null;
         await this.ready();
+        return this.attempt(this.cfg.model, messages, tools, onText, signal);
+      }
+      if (this.temperature !== undefined && err instanceof OpenAI.APIError && (err.status ?? 0) === 400 && /temperature/i.test(err.message)) {
+        this.temperature = undefined; // e.g. reasoning models that only take the default
         return this.attempt(this.cfg.model, messages, tools, onText, signal);
       }
       if (this.cfg.toolMode === "auto" && !this.textTools && tools.length && rejectsTools(err)) {
@@ -130,7 +139,7 @@ export class LLM {
 
     try {
       const stream = await this.client.chat.completions.create(
-        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true },
+        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true, temperature: this.temperature },
         { signal: combined },
       );
       for await (const chunk of stream) {

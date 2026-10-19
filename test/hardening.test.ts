@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Agent } from "../src/agent.js";
 import { isLocalEndpoint } from "../src/config.js";
@@ -17,6 +18,7 @@ import { grep } from "../src/tools/grep.js";
 import { coreTools } from "../src/tools/index.js";
 import { remember } from "../src/tools/memory.js";
 import { readFile } from "../src/tools/readFile.js";
+import { resolveInside } from "../src/tools/util.js";
 import { writeFile } from "../src/tools/writeFile.js";
 import type { Message, Tool } from "../src/types.js";
 import { assertPublicUrl } from "../src/web/net.js";
@@ -264,5 +266,20 @@ describe("small fixes", () => {
     expect(isLocalEndpoint("http://10.evil.com/v1")).toBe(false);
     expect(isLocalEndpoint("http://127.evil.com/v1")).toBe(false);
     expect(isLocalEndpoint("http://10.0.0.2:8080/v1")).toBe(true);
+  });
+});
+
+describe("a project reached through a symbolic link", () => {
+  test("the real path of a file inside it is inside, and names the same file", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "ngobe-link-"));
+    const real = path.join(base, "real");
+    fs.mkdirSync(path.join(real, "src"), { recursive: true });
+    fs.writeFileSync(path.join(real, "src", "a.js"), "x\n");
+    const link = path.join(base, "link");
+    fs.symlinkSync(real, link);
+    // The project was opened as …/link; test output printed …/real (e.g. macOS /var → /private/var).
+    const resolved = resolveInside(link, path.join(fs.realpathSync(real), "src", "a.js"));
+    expect(resolved).toBe(path.join(link, "src", "a.js"));
+    expect(() => resolveInside(link, path.join(base, "elsewhere.js"))).toThrow("outside the project");
   });
 });
