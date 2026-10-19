@@ -2,14 +2,14 @@ import type { Config } from "./config.js";
 import type { LLM } from "./llm.js";
 import type { Permissions } from "./permissions.js";
 import type { Args, Message, Tool } from "./types.js";
-import type { UI } from "./ui.js";
+import type { Ui } from "./ui.js";
 import { trimHistory, truncate } from "./context.js";
 
 interface AgentDeps {
   config: Config;
   llm: LLM;
   tools: Tool[];
-  ui: UI;
+  ui: Ui;
   perms: Permissions;
   systemPrompt: string;
 }
@@ -38,7 +38,7 @@ export class Agent {
         (chunk) => ui.write(chunk),
         signal,
       );
-      if (result.content) ui.write("\n");
+      ui.endTurn();
 
       this.messages.push({
         role: "assistant",

@@ -1,5 +1,5 @@
 import type { Args, Tool } from "./types.js";
-import type { UI } from "./ui.js";
+import type { Ui } from "./ui.js";
 
 // Commands that are safe to auto-run, provided they contain no shell metacharacters.
 const SAFE_BASH = /^(ls|pwd|git status|git diff|git log|cat|head|tail|wc)(\s|$)/;
@@ -9,7 +9,7 @@ export class Permissions {
   private always = new Set<string>();
 
   constructor(
-    private ui: UI,
+    private ui: Ui,
     private yolo: boolean,
   ) {}
 
@@ -23,8 +23,7 @@ export class Permissions {
     if (this.always.has(tool.name)) return true;
 
     const summary = tool.describe?.(args) ?? tool.name;
-    const hint = tool.name === "bash" ? "[y/n]" : "[y/n/a=always for this tool]";
-    const answer = (await this.ui.confirm(`  allow ${summary}? ${hint} `)).trim().toLowerCase();
+    const answer = (await this.ui.confirm(`allow ${summary}?`)).trim().toLowerCase();
 
     // Never grant blanket approval for shell access.
     if (answer === "a" && tool.name !== "bash") {

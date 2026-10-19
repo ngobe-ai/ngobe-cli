@@ -5,11 +5,15 @@ import { buildSystemPrompt, loadProjectInstructions } from "./context.js";
 import { LLM } from "./llm.js";
 import { Permissions } from "./permissions.js";
 import { tools } from "./tools/index.js";
-import { UI } from "./ui.js";
+import { LineUi } from "./lineUi.js";
+import { Tui } from "./tui/tui.js";
+import type { Ui } from "./ui.js";
 
 async function main() {
   const { config, prompt } = loadConfig();
-  const ui = new UI();
+  // Chat screen when interactive; plain line output for one-shot or piped use.
+  const interactive = !prompt && process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const ui: Ui = interactive ? new Tui(config) : new LineUi();
   const instructions = await loadProjectInstructions(config.cwd);
   const agent = new Agent({
     config,
@@ -22,11 +26,9 @@ async function main() {
 
   let controller: AbortController | null = null;
   ui.onInterrupt(() => {
-    if (controller) controller.abort(); // Ctrl+C cancels the current run
-    else {
-      ui.close();
-      process.exit(0);
-    }
+    if (!controller) return false;
+    controller.abort(); // Ctrl+C cancels the current run
+    return true;
   });
 
   const runOnce = async (input: string) => {
@@ -44,11 +46,10 @@ async function main() {
   // One-shot mode: agent "fix the failing test"
   if (prompt) {
     await runOnce(prompt);
-    ui.close();
+    await ui.close();
     return;
   }
 
-  ui.banner(config);
   while (true) {
     let input: string;
     try {
@@ -67,17 +68,17 @@ async function main() {
       ui.info(
         [
           "/clear  reset the conversation",
-          "/exit   quit (Ctrl+D also works)",
+          "/exit   quit (Ctrl+C at an empty prompt also quits)",
           "",
-          "end a line with \\ to write multiple lines",
-          "up/down arrows recall previous prompts",
+          "enter send · paste for multi-line input",
+          "up/down recall history · PgUp/PgDn scroll the transcript",
         ].join("\n"),
       );
       continue;
     }
     await runOnce(input);
   }
-  ui.close();
+  await ui.close();
 }
 
 main().catch((err) => {
