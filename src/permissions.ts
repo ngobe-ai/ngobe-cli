@@ -24,7 +24,7 @@ export class Permissions {
 
     const summary = tool.describe?.(args) ?? tool.name;
     const hint = tool.name === "bash" ? "[y/n]" : "[y/n/a=always for this tool]";
-    const answer = (await this.ui.ask(`  allow ${summary}? ${hint} `)).trim().toLowerCase();
+    const answer = (await this.ui.confirm(`  allow ${summary}? ${hint} `)).trim().toLowerCase();
 
     // Never grant blanket approval for shell access.
     if (answer === "a" && tool.name !== "bash") {

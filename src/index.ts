@@ -48,26 +48,34 @@ async function main() {
     return;
   }
 
-  ui.info(`mugamba • model ${config.model} • ${config.baseURL}\n/help for commands, Ctrl+C to interrupt`);
+  ui.banner(config);
   while (true) {
-    let line: string;
+    let input: string;
     try {
-      line = (await ui.ask("\n> ")).trim();
+      input = (await ui.ask()).trim();
     } catch {
       break; // input closed
     }
-    if (!line) continue;
-    if (line === "/exit" || line === "/quit") break;
-    if (line === "/clear") {
+    if (!input) continue;
+    if (input === "/exit" || input === "/quit") break;
+    if (input === "/clear") {
       agent.reset();
       ui.info("Conversation cleared.");
       continue;
     }
-    if (line === "/help") {
-      ui.info("/clear  reset the conversation\n/exit   quit");
+    if (input === "/help") {
+      ui.info(
+        [
+          "/clear  reset the conversation",
+          "/exit   quit (Ctrl+D also works)",
+          "",
+          "end a line with \\ to write multiple lines",
+          "up/down arrows recall previous prompts",
+        ].join("\n"),
+      );
       continue;
     }
-    await runOnce(line);
+    await runOnce(input);
   }
   ui.close();
 }
