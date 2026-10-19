@@ -81,6 +81,24 @@ export class LLM {
   }
 
   async chat(messages: Message[], tools: Tool[], onText: (chunk: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
+    try {
+      return await this.chatOnce(messages, tools, onText, signal);
+    } catch (err) {
+      throw this.explainAuth(err);
+    }
+  }
+
+  /** A 401/403 says which it is: no key in this shell, or a key the server refused. */
+  private explainAuth(err: unknown): unknown {
+    if (!(err instanceof OpenAI.APIError) || (err.status !== 401 && err.status !== 403)) return err;
+    const hint =
+      this.cfg.apiKey === "not-needed"
+        ? "NGOBE_API_KEY is not set in this shell (export it; if your shell profile sets it, open a new terminal or source the profile)"
+        : "the server refused NGOBE_API_KEY (check the key)";
+    return new Error(`${errorText(err)}: ${hint}`);
+  }
+
+  private async chatOnce(messages: Message[], tools: Tool[], onText: (chunk: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
     await this.ready();
     try {
       return await this.attempt(this.cfg.model, messages, tools, onText, signal);
@@ -254,8 +272,12 @@ export class LLM {
   async models(timeoutMs = 10_000): Promise<ModelInfo[]> {
     await this.ready();
     const out: ModelInfo[] = [];
-    for await (const m of this.client.models.list({ timeout: timeoutMs, maxRetries: 0 })) {
-      out.push({ id: m.id, raw: m as unknown as Record<string, unknown> });
+    try {
+      for await (const m of this.client.models.list({ timeout: timeoutMs, maxRetries: 0 })) {
+        out.push({ id: m.id, raw: m as unknown as Record<string, unknown> });
+      }
+    } catch (err) {
+      throw this.explainAuth(err);
     }
     return out;
   }

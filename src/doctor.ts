@@ -64,7 +64,9 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
     if (ids.length) console.log(dim(`         serves: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ` (+${ids.length - 8})` : ""}`));
   } catch (err) {
     healthy = false;
-    console.log(`${bold("model  ")} ${bad(`${config.baseURL} unreachable: ${message(err)}`)}`);
+    // A 401/403 means the server answered: it's the key, not the network.
+    const refused = /^40[13]\b/.test(message(err));
+    console.log(`${bold("model  ")} ${bad(`${config.baseURL} ${refused ? "refused the request" : "unreachable"}: ${message(err)}`)}`);
     const hint = await suggestEndpoint(config);
     if (hint) console.log(`         ${warn(hint)}`);
   }

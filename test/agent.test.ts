@@ -311,6 +311,18 @@ describe("agent loop", () => {
 });
 
 describe("model gateway", () => {
+  test("a 401 says whether the key is missing from this shell or refused by the server", async () => {
+    const model = fakeModel([], () => new Response(JSON.stringify({ error: { message: "missing or invalid API key" } }), { status: 401 }));
+    stops.push(model.stop);
+    const base = { baseURL: model.baseURL, model: "fake-model", maxRetries: 0 };
+    await expect(new LLM(testConfig({ ...base, apiKey: "not-needed" })).chat([{ role: "user", content: "hi" }], [], () => {})).rejects.toThrow(
+      "NGOBE_API_KEY is not set in this shell",
+    );
+    await expect(new LLM(testConfig({ ...base, apiKey: "sk-wrong" })).chat([{ role: "user", content: "hi" }], [], () => {})).rejects.toThrow(
+      "the server refused NGOBE_API_KEY",
+    );
+  });
+
   test("requests carry the configured temperature; one the server refuses is dropped", async () => {
     let refused = false;
     const model = fakeModel([{ content: "ok" }], (body) => {
