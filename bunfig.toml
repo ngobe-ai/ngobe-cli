@@ -1,0 +1,3 @@
+[test]
+# Only our tests: bench/fixtures contains deliberately failing tests for the benchmark.
+root = "./test"

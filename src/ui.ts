@@ -1,7 +1,19 @@
 const paint = (code: number) => (s: string) => `\x1b[${code}m${s}\x1b[0m`;
+
+/**
+ * Model-supplied text made safe to show in a prompt: terminal escape sequences removed and
+ * other control characters (\r, backspace …) made visible, so nothing can be hidden from the
+ * person approving it. Newlines and tabs are kept.
+ */
+export function printable(s: string): string {
+  return s
+    .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
 export const bold = paint(1);
 export const dim = paint(2);
 export const red = paint(31);
+export const green = paint(32);
 export const yellow = paint(33);
 export const cyan = paint(36);
 

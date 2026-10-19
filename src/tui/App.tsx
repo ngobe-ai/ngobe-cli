@@ -2,14 +2,17 @@ import os from "node:os";
 import {memo, useEffect, useRef, useState, useSyncExternalStore} from "react";
 import {Box, Text, Spacer, measureElement, useApp, useInput, usePaste, useWindowSize} from "ink";
 import type {DOMElement} from "ink";
+import type {Mode} from "../config.js";
 import type {NoteTone, Store} from "./store.js";
 
 export interface TuiConfig {
   model: string;
   baseURL: string;
   cwd: string;
-  yolo: boolean;
+  mode: Mode;
 }
+
+const MODE_COLOR: Record<Mode, string> = {ask: "cyan", plan: "cyan", edit: "gray", auto: "yellow"};
 
 interface Props {
   store: Store;
@@ -93,7 +96,7 @@ export function App({store, config, onInterrupt}: Props) {
         </Text>
         <Spacer />
         <Text wrap="truncate-start">
-          {config.yolo ? <Text color="yellow">[yolo] · </Text> : null}
+          {config.mode !== "edit" ? <Text color={MODE_COLOR[config.mode]}>[{config.mode}] · </Text> : null}
           <Text dimColor>{config.model}</Text>
           {store.status ? <Text dimColor> · {store.status}</Text> : null}
           {store.queuedCount ? <Text dimColor> · {store.queuedCount} queued</Text> : null}

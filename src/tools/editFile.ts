@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import type { Tool } from "../types.js";
-import { reqStr, resolveInside } from "./util.js";
+import { assertUnchanged, hashText, isGitInternal, isSecretPath, reqStr, resolveInside } from "./util.js";
 
 export const editFile: Tool = {
   name: "edit_file",
@@ -16,12 +16,15 @@ export const editFile: Tool = {
     required: ["path", "old_str", "new_str"],
   },
   risk: "write",
+  // Secrets, and git internals (hooks and config can run commands), always need a person.
+  needs: (a) => (typeof a.path === "string" && (isSecretPath(a.path) || isGitInternal(a.path)) ? "explicit" : "approval"),
   describe: (a) => `edit ${a.path}\n    - ${preview(a.old_str)}\n    + ${preview(a.new_str)}`,
   async run(args, ctx) {
     const abs = resolveInside(ctx.cwd, reqStr(args, "path"));
     let oldStr = reqStr(args, "old_str");
     let newStr = reqStr(args, "new_str", true);
     const text = await fs.readFile(abs, "utf8");
+    assertUnchanged(ctx, abs, text, String(args.path));
     // Models send "\n" line endings; still match CRLF files, and keep them CRLF.
     if (text.includes("\r\n") && !oldStr.includes("\r\n")) {
       oldStr = oldStr.replace(/\n/g, "\r\n");
@@ -32,7 +35,9 @@ export const editFile: Tool = {
     if (count === 0) throw new Error("old_str was not found. Re-read the file and copy the text exactly.");
     if (count > 1) throw new Error(`old_str matched ${count} times. Include more surrounding context so it matches once.`);
 
-    await fs.writeFile(abs, text.replace(oldStr, () => newStr)); // fn avoids "$&" pattern surprises
+    const updated = text.replace(oldStr, () => newStr); // fn avoids "$&" pattern surprises
+    await fs.writeFile(abs, updated);
+    ctx.files?.set(abs, hashText(updated));
     return `Edited ${args.path}`;
   },
 };

@@ -1,0 +1,19 @@
+{
+  "baseURL": "http://localhost:12434/engines/v1",
+  "model": "ai/qwen2.5-coder",
+  "fallbackModel": "",
+  "toolMode": "auto",
+  "mode": "edit",
+  "maxTurns": 40,
+  "maxToolCalls": 100,
+  "maxRunSeconds": 1800,
+  "maxContextChars": 48000,
+  "requestTimeout": 300,
+  "maxRetries": 2,
+  "memory": true,
+  "searchProviders": ["searxng"],
+  "searxngURL": "http://localhost:8888",
+  "docs": {
+    "filament": ["filamentphp.com"]
+  }
+}

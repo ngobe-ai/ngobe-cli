@@ -5,15 +5,21 @@ import { isInside, reqStr } from "./util.js";
 const IGNORE = ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/target/**"];
 
 /**
- * fast-glob limited to the project. It happily walks "../" and absolute patterns, so
- * refuse any pattern whose static base directory is outside cwd. ".." inside the
- * dynamic part (after a wildcard or brace) can't escape: the walker never yields "..".
+ * fast-glob happily walks "../" and absolute patterns, so refuse any pattern whose static
+ * base directory is outside cwd. ".." inside the dynamic part (after a wildcard or brace)
+ * can't escape: the walker never yields "..".
  */
-export async function findFiles(pattern: string, cwd: string): Promise<string[]> {
+export function assertPatternInside(pattern: string, cwd: string): void {
   for (const task of fg.generateTasks(pattern, { cwd })) {
     if (!isInside(cwd, task.base)) throw new Error(`pattern reaches outside the project directory: ${pattern}`);
   }
-  return fg(pattern, { cwd, ignore: IGNORE });
+}
+
+/** fast-glob limited to the project. */
+export async function findFiles(pattern: string, cwd: string): Promise<string[]> {
+  assertPatternInside(pattern, cwd);
+  // Linked directories may point anywhere (even /), so don't descend into them.
+  return fg(pattern, { cwd, ignore: IGNORE, followSymbolicLinks: false });
 }
 
 export const glob: Tool = {

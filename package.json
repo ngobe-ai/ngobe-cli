@@ -1,10 +1,25 @@
 {
-  "name": "mugamba",
-  "version": "0.1.0",
-  "description": "Mugamba: a minimal coding agent CLI for OpenAI-compatible endpoints (Ollama, llama.cpp, vLLM, hosted providers)",
+  "name": "ngobe",
+  "version": "0.2.0",
+  "description": "Ngobe: a resource-efficient coding agent CLI for local OpenAI-compatible models (Docker Model Runner, llama.cpp, Ollama, vLLM) with live official-source verification, safe tools and measured self-improvement",
   "type": "module",
   "bin": {
+    "ngobe": "dist/index.js",
     "mugamba": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "bench",
+    "docs",
+    "config.example.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ngobe-ai/ngobe-cli.git"
   },
   "scripts": {
     "dev": "bun src/index.ts",

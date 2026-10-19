@@ -1,9 +1,13 @@
+import crypto from "node:crypto";
 import type { Config } from "./config.js";
-import type { LLM } from "./llm.js";
-import type { Permissions } from "./permissions.js";
-import type { Args, Message, Tool } from "./types.js";
-import type { Ui } from "./ui.js";
-import { trimHistory, truncate } from "./context.js";
+import { FRESHNESS_HINT, historySize, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
+import type { LLM, ToolCall } from "./llm.js";
+import type { AuditLog } from "./log.js";
+import type { Memory } from "./memory/store.js";
+import { needOf, toolsForMode, type Permissions } from "./permissions.js";
+import { validateArgs } from "./tools/schema.js";
+import type { Args, FileTracker, Message, Tool, ToolContext } from "./types.js";
+import { printable, type Ui } from "./ui.js";
 
 interface AgentDeps {
   config: Config;
@@ -12,89 +16,384 @@ interface AgentDeps {
   ui: Ui;
   perms: Permissions;
   systemPrompt: string;
+  memory?: Memory | null;
+  log?: AuditLog;
+  /** Recorded with each run: the CLI command and the active prompt variant. */
+  command?: string;
+  variant?: string;
 }
+
+export type Outcome = "completed" | "limit" | "cancelled" | "error";
+
+export interface RunStats {
+  turns: number;
+  toolCalls: number;
+  toolErrors: number;
+  tokensIn: number;
+  tokensOut: number;
+  tokensEstimated: boolean;
+  modelMs: number;
+  toolMs: number;
+  durationMs: number;
+  /** Whether tests the run executed passed, if it ran any. */
+  tests: "passed" | "failed" | null;
+}
+
+export interface RunResult {
+  outcome: Outcome;
+  /** The model's final answer. */
+  text: string;
+  stats: RunStats;
+  /** Tool calls in order, with their arguments (for evaluation). */
+  calls: { name: string; args: Args; ok: boolean }[];
+}
+
+type ErrorClass = "unknown_tool" | "invalid_args" | "repeated" | "denied" | "timeout" | "cancelled" | "failed";
+
+class ToolFailure extends Error {
+  constructor(
+    readonly kind: ErrorClass,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+interface Prepared {
+  call: ToolCall;
+  tool?: Tool;
+  args?: Args;
+  /** Identity for repeat detection: name + arguments. */
+  key?: string;
+  /** Set when the call can't run (unknown tool, bad arguments, repeated). */
+  failure?: ToolFailure;
+}
+
+const PARALLEL = 4; // concurrent read-only tool calls
+const TEST_COMMAND = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\bbun test\b|\bpytest\b|\bphpunit\b|\bartisan test\b|\b(flutter|dart|go|cargo)\s+test\b|\bjest\b|\bvitest\b|\bmake test\b/;
+const BUILD_COMMAND = /\b(npm|pnpm|yarn|bun)\s+run\s+build\b|\btsc\b|\b(cargo|go|flutter)\s+build\b|\bmake build\b/;
 
 export class Agent {
   private messages: Message[] = [];
+  /** Model-written summary of turns dropped from the history. */
+  private summary = "";
+  private files: FileTracker = new Map();
+  private searchResults = new Set<string>();
 
   constructor(private d: AgentDeps) {}
 
   reset() {
     this.messages = [];
+    this.summary = "";
+    this.files.clear();
   }
 
   /** One user request: loop model -> tools -> model until the model answers without tool calls. */
-  async run(userInput: string, signal: AbortSignal): Promise<void> {
-    const { config, llm, tools, ui, perms, systemPrompt } = this.d;
-    const byName = new Map(tools.map((t) => [t.name, t]));
+  async run(userInput: string, signal: AbortSignal): Promise<RunResult> {
+    const { config, llm, ui } = this.d;
+    const runId = crypto.randomUUID().slice(0, 8);
+    const started = Date.now();
+    const stats: RunStats = { turns: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, tokensEstimated: false, modelMs: 0, toolMs: 0, durationMs: 0, tests: null };
+    const result: RunResult = { outcome: "completed", text: "", stats, calls: [] };
+    const offered = toolsForMode(this.d.tools, config.mode);
+    const byName = new Map(offered.map((t) => [t.name, t]));
+    const repeats = new Map<string, number>();
+    const fresh = needsFreshInfo(userInput);
+    this.d.log?.event("run_start", { run: runId, mode: config.mode, model: config.model, chars: userInput.length, fresh });
     this.messages.push({ role: "user", content: userInput });
 
-    for (let turn = 0; turn < config.maxTurns; turn++) {
-      trimHistory(this.messages, config.maxContextChars);
+    try {
+      for (;;) {
+        if (stats.turns >= config.maxTurns) {
+          result.outcome = "limit";
+          ui.warn(`Stopped after ${config.maxTurns} turns (NGOBE_MAX_TURNS).`);
+          break;
+        }
+        if (Date.now() - started > config.maxRunSeconds * 1000) {
+          result.outcome = "limit";
+          ui.warn(`Stopped: the run took longer than ${config.maxRunSeconds}s (NGOBE_MAX_RUN_SECONDS).`);
+          break;
+        }
+        trimHistory(this.messages, config.maxContextChars);
+        await this.compact(signal);
 
-      const result = await llm.chat(
-        [{ role: "system", content: systemPrompt }, ...this.messages],
-        tools,
-        (chunk) => ui.write(chunk),
-        signal,
-      );
-      ui.endTurn();
+        const system = [this.d.systemPrompt, fresh && FRESHNESS_HINT].filter(Boolean).join("\n\n");
+        // The summary was written from tool output, so it goes in the conversation, not the system prompt.
+        const earlier: Message[] = this.summary
+          ? [
+              { role: "user", content: `[Summary of the earlier conversation, for context only]\n${this.summary}` },
+              { role: "assistant", content: "Understood." },
+            ]
+          : [];
+        const turn = await llm.chat([{ role: "system", content: system }, ...earlier, ...this.messages], offered, (chunk) => ui.write(chunk), signal);
+        ui.endTurn();
+        stats.turns++;
+        stats.modelMs += turn.totalMs;
+        stats.tokensIn += turn.usage.input;
+        stats.tokensOut += turn.usage.output;
+        stats.tokensEstimated ||= turn.usage.estimated;
+        this.d.log?.event("model", {
+          run: runId,
+          model: turn.model,
+          ms: turn.totalMs,
+          first_token_ms: turn.firstTokenMs,
+          tokens_in: turn.usage.input,
+          tokens_out: turn.usage.output,
+          estimated: turn.usage.estimated,
+          tool_calls: turn.toolCalls.map((c) => c.name),
+        });
 
-      this.messages.push({
-        role: "assistant",
-        content: result.content || null,
-        tool_calls: result.toolCalls.length
-          ? result.toolCalls.map((c) => ({
-              id: c.id,
-              type: "function" as const,
-              function: { name: c.name, arguments: c.arguments },
-            }))
-          : undefined,
-      });
+        this.messages.push({
+          role: "assistant",
+          content: turn.content || null,
+          tool_calls: turn.toolCalls.length
+            ? turn.toolCalls.map((c) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.arguments } }))
+            : undefined,
+        });
+        if (turn.toolCalls.length === 0) {
+          result.text = turn.content;
+          break;
+        }
 
-      if (result.toolCalls.length === 0) return; // done
-
-      for (const call of result.toolCalls) {
-        const output = signal.aborted
-          ? "Cancelled by user."
-          : await this.execute(call.name, call.arguments, byName, signal);
-        // Every tool_call needs a matching tool message, even when cancelled.
-        this.messages.push({ role: "tool", tool_call_id: call.id, content: output });
+        if (stats.toolCalls + turn.toolCalls.length > config.maxToolCalls) {
+          for (const c of turn.toolCalls) this.messages.push({ role: "tool", tool_call_id: c.id, content: "Not run: the tool-call limit for this request was reached." });
+          result.outcome = "limit";
+          ui.warn(`Stopped: more than ${config.maxToolCalls} tool calls (NGOBE_MAX_TOOL_CALLS).`);
+          break;
+        }
+        let outputs: string[] = [];
+        try {
+          outputs = await this.runCalls(turn.toolCalls, byName, repeats, signal, runId, result);
+        } finally {
+          // Every tool_call needs a matching tool message, even when cancelled or on an internal error.
+          turn.toolCalls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
+        }
+        if (signal.aborted) break;
       }
-      if (signal.aborted) return;
-    }
-    ui.warn(`Stopped after ${config.maxTurns} turns.`);
-  }
-
-  private async execute(
-    name: string,
-    rawArgs: string,
-    byName: Map<string, Tool>,
-    signal: AbortSignal,
-  ): Promise<string> {
-    const { ui, perms, config } = this.d;
-
-    const tool = byName.get(name);
-    if (!tool) return `Error: unknown tool "${name}". Available: ${[...byName.keys()].join(", ")}`;
-
-    let args: Args;
-    try {
-      const parsed: unknown = JSON.parse(rawArgs || "{}");
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
-      args = parsed as Args;
-    } catch {
-      return `Error: arguments for ${name} were not a valid JSON object. Retry with valid JSON.`;
-    }
-
-    ui.tool(tool.describe?.(args) ?? name);
-    if (!(await perms.check(tool, args))) return "Error: the user denied this action.";
-    if (signal.aborted) return "Cancelled by user."; // Ctrl+C while the prompt was open
-
-    try {
-      return truncate(await tool.run(args, { cwd: config.cwd, signal }));
+      if (signal.aborted) result.outcome = "cancelled";
+      return result;
     } catch (err) {
-      // Error text goes back to the model so it can correct itself.
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      result.outcome = signal.aborted ? "cancelled" : "error";
+      this.d.log?.event("run_error", { run: runId, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    } finally {
+      stats.durationMs = Date.now() - started;
+      this.record(runId, started, result);
     }
   }
+
+  /** Validate every call, then run them: read-only batches in parallel, anything needing approval in order. */
+  private async runCalls(
+    calls: ToolCall[],
+    byName: Map<string, Tool>,
+    repeats: Map<string, number>,
+    signal: AbortSignal,
+    runId: string,
+    result: RunResult,
+  ): Promise<string[]> {
+    const prepared = calls.map((c) => this.prepare(c, byName, repeats));
+    const quiet = (p: Prepared) => !p.failure && p.tool && (p.tool.risk === "safe" || p.tool.risk === "network") && needOf(p.tool, p.args!) === "none";
+    const outputs: string[] = new Array(calls.length);
+
+    if (prepared.length > 1 && prepared.every(quiet)) {
+      for (const p of prepared) this.d.ui.tool(printable(p.tool!.describe?.(p.args!) ?? p.tool!.name));
+      let next = 0;
+      const worker = async () => {
+        while (next < prepared.length) {
+          const i = next++;
+          outputs[i] = await this.execute(prepared[i], signal, runId, result, false, repeats);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(PARALLEL, prepared.length) }, worker));
+    } else {
+      for (let i = 0; i < prepared.length; i++) {
+        outputs[i] = signal.aborted ? "Cancelled by user." : await this.execute(prepared[i], signal, runId, result, true, repeats);
+      }
+    }
+    return outputs;
+  }
+
+  private prepare(call: ToolCall, byName: Map<string, Tool>, repeats: Map<string, number>): Prepared {
+    const tool = byName.get(call.name);
+    if (!tool) {
+      return { call, failure: new ToolFailure("unknown_tool", `unknown tool "${call.name}". Available: ${[...byName.keys()].join(", ")}`) };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(call.arguments || "{}");
+    } catch {
+      return { call, tool, failure: new ToolFailure("invalid_args", `arguments for ${call.name} were not valid JSON. Retry with a JSON object.`) };
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return { call, tool, failure: new ToolFailure("invalid_args", `arguments for ${call.name} must be a JSON object.`) };
+    }
+    const { args, errors } = validateArgs(tool.parameters, raw as Args);
+    if (errors.length) return { call, tool, failure: new ToolFailure("invalid_args", `invalid arguments for ${call.name}: ${errors.join("; ")}.`) };
+
+    const key = `${call.name} ${JSON.stringify(args, Object.keys(args).sort())}`;
+    const seen = (repeats.get(key) ?? 0) + 1;
+    repeats.set(key, seen);
+    if (seen > 2) {
+      return { call, tool, args, key, failure: new ToolFailure("repeated", `you already made this exact ${call.name} call ${seen - 1} times since anything changed. Use the earlier result or try a different approach.`) };
+    }
+    return { call, tool, args, key };
+  }
+
+  /** Memory bookkeeping must never break a run (e.g. SQLITE_BUSY from another ngobe process). */
+  private safely(fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      this.d.log?.event("memory_error", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  private async execute(p: Prepared, signal: AbortSignal, runId: string, result: RunResult, announce: boolean, repeats: Map<string, number>): Promise<string> {
+    const { ui, perms, config, memory, log } = this.d;
+    const started = Date.now();
+    const name = p.tool?.name ?? p.call.name;
+    let output: string;
+    let failure: ToolFailure | null = p.failure ?? null;
+
+    if (!failure) {
+      const tool = p.tool!;
+      const args = p.args!;
+      if (announce) ui.tool(printable(tool.describe?.(args) ?? tool.name));
+      if (!(await perms.check(tool, args))) failure = new ToolFailure("denied", "the user denied this action.");
+      else if (signal.aborted) failure = new ToolFailure("cancelled", "cancelled by user."); // Ctrl+C while the prompt was open
+    }
+    if (failure) {
+      output = `Error: ${failure.message}`;
+    } else {
+      try {
+        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, this.context(s)), signal));
+      } catch (err) {
+        failure = err instanceof ToolFailure ? err : new ToolFailure(signal.aborted ? "cancelled" : "failed", err instanceof Error ? err.message : String(err));
+        // Error text goes back to the model so it can correct itself.
+        output = `Error: ${failure.message}`;
+      }
+    }
+
+    const ms = Date.now() - started;
+    result.stats.toolCalls++;
+    result.stats.toolMs += ms;
+    result.calls.push({ name, args: p.args ?? {}, ok: !failure });
+    if (failure) result.stats.toolErrors++;
+    log?.event("tool", { run: runId, tool: name, ms, ok: !failure, error: failure?.kind, summary: p.tool && p.args ? (p.tool.describe?.(p.args) ?? name).slice(0, 200) : name });
+    this.safely(() => {
+      if (!memory?.enabled) return;
+      memory.recordToolEvent(runId, name, !failure, failure?.kind ?? null, ms);
+      if (failure && failure.kind !== "denied" && failure.kind !== "cancelled") memory.recordFailure(runId, config.cwd, name, failure.message);
+    });
+    if (!failure && name === "bash") this.safely(() => this.observeCommand(String(p.args?.command ?? ""), output, runId, result));
+    // Something changed (a file write, a command): other calls may now give different results.
+    if (!failure && p.key && (p.tool?.risk === "write" || p.tool?.risk === "exec")) {
+      for (const k of [...repeats.keys()]) if (k !== p.key) repeats.delete(k);
+    }
+    return output;
+  }
+
+  /** Learn from shell results: whether tests passed, and which test/build commands work here. */
+  private observeCommand(command: string, output: string, runId: string, result: RunResult): void {
+    const code = Number(/^exit code (\d+)/.exec(output)?.[1] ?? NaN);
+    if (!Number.isFinite(code)) return;
+    const { memory, config } = this.d;
+    const isTest = TEST_COMMAND.test(command);
+    if (isTest) result.stats.tests = code === 0 ? "passed" : "failed";
+    if (!memory?.enabled) return;
+    if (code !== 0) {
+      const errorLine = output.split("\n").reverse().find((l) => /error|failed|exception|not found|cannot|denied|undefined/i.test(l)) ?? output.split("\n")[1] ?? "";
+      memory.recordFailure(runId, config.cwd, "bash", `${command.slice(0, 80)}: ${errorLine.slice(0, 200)}`);
+      if (code === 127) memory.weaken(config.cwd, "command", isTest ? "test" : "build");
+      return;
+    }
+    const kind = isTest ? "test" : BUILD_COMMAND.test(command) ? "build" : null;
+    if (kind && command.length < 200 && !command.includes("\n")) {
+      try {
+        memory.remember({ project: config.cwd, kind: "command", key: kind, value: command, source: "observed", confidence: 0.6, ttlDays: 90 });
+      } catch {
+        // commands containing credentials are not remembered
+      }
+    }
+  }
+
+  private context(signal: AbortSignal): ToolContext {
+    return { cwd: this.d.config.cwd, signal, config: this.d.config, files: this.files, memory: this.d.memory, searchResults: this.searchResults };
+  }
+
+  /** When trimming wasn't enough, have the model summarize earlier requests and drop them. */
+  private async compact(signal: AbortSignal): Promise<void> {
+    const { config, llm, log } = this.d;
+    if (historySize(this.messages) <= config.maxContextChars) return;
+    // Cut at the latest user request: everything before it is summarized, the current task stays whole.
+    let cut = -1;
+    for (let i = this.messages.length - 1; i > 0; i--) {
+      if (this.messages[i].role === "user") {
+        cut = i;
+        break;
+      }
+    }
+    if (cut <= 0) return;
+    const res = await llm.chat(
+      [
+        {
+          role: "system",
+          content:
+            "Summarize this coding session so it can be continued: the user's goals, decisions made, files changed, commands run and their results, and open problems. Be specific and under 300 words.",
+        },
+        { role: "user", content: transcript(this.messages.slice(0, cut), Math.floor(config.maxContextChars / 2)) },
+      ],
+      [],
+      () => {},
+      signal,
+    );
+    this.summary = [this.summary, res.content.trim()].filter(Boolean).join("\n");
+    this.messages = this.messages.slice(cut);
+    log?.event("compact", { dropped: cut, summary_chars: res.content.length });
+  }
+
+  private record(runId: string, started: number, result: RunResult): void {
+    const { config, memory, log, command, variant } = this.d;
+    const s = result.stats;
+    log?.event("run_end", { run: runId, outcome: result.outcome, ms: s.durationMs, model_ms: s.modelMs, tool_ms: s.toolMs, turns: s.turns, tool_calls: s.toolCalls, tool_errors: s.toolErrors, tests: s.tests });
+    if (!memory?.enabled) return;
+    try {
+      memory.recordRun({
+        id: runId,
+        project: config.cwd,
+        command: command ?? "",
+        mode: config.mode,
+        model: config.model,
+        variant: variant ?? "",
+        started_at: new Date(started).toISOString(),
+        duration_ms: s.durationMs,
+        model_ms: s.modelMs,
+        tool_ms: s.toolMs,
+        turns: s.turns,
+        tool_calls: s.toolCalls,
+        tool_errors: s.toolErrors,
+        tokens_in: s.tokensIn,
+        tokens_out: s.tokensOut,
+        tokens_estimated: s.tokensEstimated ? 1 : 0,
+        outcome: result.outcome,
+        tests: s.tests,
+      });
+    } catch {
+      // recording outcomes must never fail a run
+    }
+  }
+}
+
+/** Run a tool under its time limit; the signal it gets is aborted on timeout or Ctrl+C. */
+async function withTimeout(tool: Tool, fn: (signal: AbortSignal) => Promise<string>, signal: AbortSignal): Promise<string> {
+  const ms = tool.timeoutMs ?? 120_000;
+  if (ms === 0) return fn(signal);
+  const timeout = AbortSignal.timeout(ms);
+  const combined = AbortSignal.any([signal, timeout]);
+  return Promise.race([
+    fn(combined),
+    new Promise<never>((_, reject) =>
+      timeout.addEventListener("abort", () => reject(new ToolFailure("timeout", `${tool.name} timed out after ${ms / 1000}s`)), { once: true }),
+    ),
+  ]);
 }
