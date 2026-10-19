@@ -90,6 +90,8 @@ export interface Ui {
   modelChanged?(model: string): void;
   /** The user asks to cycle the mode (shift+tab); the callback switches it. */
   onModeCycle?(cb: () => void): void;
+  /** The user started typing (throttled); used to warm the model up again after a break. */
+  onTyping?(cb: () => void): void;
   /** First run in a folder: does the user trust it? Resolves false to quit. */
   trust?(dir: string): Promise<boolean>;
   onInterrupt(cb: () => boolean): void;

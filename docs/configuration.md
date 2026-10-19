@@ -14,6 +14,7 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 | `NGOBE_API_KEY` | (env only) | `not-needed` | Key for hosted providers |
 | `NGOBE_MODEL` / `-m` | `model` | `qwen3-coder` | Model id as the endpoint names it (`docker model ls`, `/v1/models`) |
 | `NGOBE_FALLBACK_MODEL` | `fallbackModel` | none | Tried once when the main model is missing, unreachable or silent |
+| `NGOBE_WARMUP` | `warmup` | `true` | In the chat, have the server process the fixed prompt prefix (system prompt + tools) while you type: at start, and when you start typing after 2 idle minutes (Docker Model Runner unloads idle models after ~5). Costs one short request; set `false` on a metered API |
 | `NGOBE_TOOL_PROFILE` | `toolProfile` | `lean` | `lean`: 12 core tools with one-line descriptions, for small models on a CPU (every definition is re-read on a cold start); `full`: every tool (git, todos, multi-edit, background shells, sub-agents) with full descriptions |
 | `NGOBE_TOOL_MODE` | `toolMode` | `auto` | `native` (OpenAI tool calls), `text` (`<tool_call>` protocol in the prompt), `auto` (native, switching to text if the endpoint refuses tools) |
 | `NGOBE_REQUEST_TIMEOUT` | `requestTimeout` | `300` | Seconds without a streamed chunk before a request is abandoned. Raise it for big prompts on slow CPUs |

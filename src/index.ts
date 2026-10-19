@@ -18,6 +18,9 @@ const AGENT_COMMANDS: Partial<Record<Command, { mode: Config["mode"] | null; pro
   review: { mode: "ask", prompt: (ref, config) => reviewRequest(config.cwd, ref, config.maxContextChars) },
 };
 
+/** After this long without a request, typing triggers another warm-up (cheap when still cached). */
+const WARM_AFTER_IDLE_MS = 2 * 60_000;
+
 async function main() {
   const loaded = loadConfig();
   for (const w of loaded.warnings) console.error(yellow(w));
@@ -63,6 +66,18 @@ async function runAgent(loaded: LoadedConfig) {
   ui.onModeCycle?.(() => agent.setMode(MODES[(MODES.indexOf(agent.currentMode) + 1) % MODES.length]));
 
   let controller: AbortController | null = null;
+  // While the user reads the screen and types, have the server process the fixed prompt prefix
+  // (about a minute from cold on a CPU), and again when they start typing after a break: Docker
+  // Model Runner unloads a model after ~5 idle minutes, and its prompt cache with it.
+  if (!prompt && config.warmup) {
+    void agent.warmup().then((ms) => {
+      if (ms !== null && ms > 5_000 && agent.usage.runs === 0 && !controller) ui.info(`Model ready (warmed up in ${Math.round(ms / 1000)}s).`);
+    });
+    ui.onTyping?.(() => {
+      if (!controller && agent.idleFor() > WARM_AFTER_IDLE_MS) void agent.warmup();
+    });
+  }
+
   ui.onInterrupt(() => {
     if (!controller) return false;
     controller.abort(); // Ctrl+C cancels the current run

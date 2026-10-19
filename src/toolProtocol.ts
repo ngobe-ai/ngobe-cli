@@ -74,7 +74,31 @@ function parseLoose(text: string, known: string[]): { content: string; calls: Te
     consider(brace, m.index);
   }
   // Whatever follows the first call (often made-up results) is not part of the reply.
-  return calls.length ? { content: text.slice(0, first).trim(), calls } : { content: text, calls: [] };
+  if (calls.length) return { content: text.slice(0, first).trim(), calls };
+  const handoff = known.includes("bash") ? shellHandoff(text) : null;
+  if (handoff) return { content: handoff.before, calls: [{ name: "bash", arguments: JSON.stringify({ command: handoff.command }) }] };
+  return { content: text, calls: [] };
+}
+
+const SHELL_FENCE = /```(?:bash|sh|shell|zsh|console|terminal)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/;
+const ASKS_TO_RUN =
+  /\b(?:provide|share|paste|send|show|give)\b[^.\n]{0,40}\b(?:output|results?|errors?)\b|\blet me know\b[^.\n]{0,40}\b(?:output|results?|errors?|happens)\b|\bonce you(?:'ve| have) run\b|\b(?:run|execute) (?:this|these|it|the (?:following|command|tests?))\b[^.\n]{0,40}\b(?:and|then) (?:share|send|paste|provide|tell)\b/i;
+
+/**
+ * Small models also hand commands to the user ("run this and paste the output") instead of
+ * calling bash. When a reply puts a short command in a shell block and asks the user to run it
+ * or share its output, it becomes a bash call, with the usual permission check. Plain
+ * instructions ("to start the server, run …") are left alone.
+ */
+export function shellHandoff(text: string): { command: string; before: string } | null {
+  const m = SHELL_FENCE.exec(text);
+  if (!m || !ASKS_TO_RUN.test(text)) return null;
+  const lines = m[1]
+    .split("\n")
+    .map((l) => l.trim().replace(/^\$\s+/, ""))
+    .filter((l) => l && !l.startsWith("#"));
+  if (!lines.length || lines.length > 3) return null;
+  return { command: lines.join(" && "), before: text.slice(0, m.index).trim() };
 }
 
 /** The JSON object starting at text[start] (a "{"), matching braces outside strings. */

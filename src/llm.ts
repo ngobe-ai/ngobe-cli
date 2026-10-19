@@ -108,11 +108,7 @@ export class LLM {
     onText: (chunk: string) => void,
     signal?: AbortSignal,
   ): Promise<AssistantTurn> {
-    const text = this.textTools && tools.length > 0;
-    const wire = text ? withTextProtocol(messages, tools) : messages;
-    const toolDefs: OpenAI.Chat.ChatCompletionTool[] = text
-      ? []
-      : tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
+    const { wire, toolDefs } = this.wire(messages, tools);
 
     const idle = new AbortController();
     const idleMs = this.cfg.requestTimeout * 1000;
@@ -218,6 +214,31 @@ export class LLM {
       const res = await this.client.chat.completions.create({ model: this.cfg.model, messages: [{ role: "user", content: "Reply with OK." }], max_tokens: 8 }, opts);
       return { ms: Date.now() - started, toolCalls: "unsupported", text: res.choices[0]?.message?.content ?? "" };
     }
+  }
+
+  /** The request as sent: identical for chat() and warm(), so the server's prompt cache matches. */
+  private wire(messages: Message[], tools: Tool[]): { wire: Message[]; toolDefs: OpenAI.Chat.ChatCompletionTool[] } {
+    const text = this.textTools && tools.length > 0;
+    return {
+      wire: text ? withTextProtocol(messages, tools) : messages,
+      toolDefs: text ? [] : tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })),
+    };
+  }
+
+  /**
+   * Have the server process this prompt now and keep it in its cache: one token, result ignored.
+   * On a CPU server the fixed prefix (system prompt + tools) takes about a minute from cold;
+   * done while the user types, the first answer starts much sooner. Returns the time it took.
+   */
+  async warm(messages: Message[], tools: Tool[], signal?: AbortSignal): Promise<number> {
+    await this.ready();
+    const started = Date.now();
+    const { wire, toolDefs } = this.wire(messages, tools);
+    await this.client.chat.completions.create(
+      { model: this.cfg.model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, max_tokens: 1 },
+      { signal, timeout: this.cfg.requestTimeout * 1000, maxRetries: 0 },
+    );
+    return Date.now() - started;
   }
 
   /** Models the endpoint serves, with whatever metadata it reports. */

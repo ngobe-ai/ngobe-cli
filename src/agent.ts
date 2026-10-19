@@ -134,6 +134,9 @@ export class Agent {
   /** Status line state for the current run. */
   private status = { label: "", since: 0, tokens: 0 };
   readonly usage: SessionUsage = { runs: 0, tokensIn: 0, tokensOut: 0, toolCalls: 0, ms: 0 };
+  /** When the model last worked for us (a run or a warm-up): the server unloads idle models. */
+  private lastActive = 0;
+  private warming: Promise<number | null> | null = null;
 
   constructor(private d: AgentDeps) {
     this.mode = d.config.mode;
@@ -145,6 +148,36 @@ export class Agent {
     this.files.clear();
     this.todoList = [];
     this.d.ui.todos([]);
+  }
+
+  /**
+   * Send the fixed prompt prefix (system prompt + tools of the current mode) ahead of the first
+   * request, so the server has it cached. Resolves with the time it took, or null on failure
+   * (a warm-up never reports errors: the real request will).
+   */
+  warmup(signal?: AbortSignal): Promise<number | null> {
+    this.warming ??= this.d.llm
+      .warm([{ role: "system", content: this.systemFor(this.mode) }, { role: "user", content: "hi" }], toolsForMode(this.d.tools, this.mode), signal)
+      .then(
+        (ms) => {
+          this.d.log?.event("warmup", { ms });
+          return ms;
+        },
+        (err) => {
+          this.d.log?.event("warmup_error", { error: err instanceof Error ? err.message : String(err) });
+          return null;
+        },
+      )
+      .finally(() => {
+        this.warming = null;
+        this.lastActive = Date.now();
+      });
+    return this.warming;
+  }
+
+  /** Milliseconds since the model last worked for this session (Infinity if never). */
+  idleFor(): number {
+    return this.lastActive ? Date.now() - this.lastActive : Infinity;
   }
 
   get currentMode(): Mode {
@@ -310,6 +343,7 @@ export class Agent {
       throw err;
     } finally {
       stats.durationMs = Date.now() - started;
+      this.lastActive = Date.now();
       this.usage.runs++;
       this.usage.tokensIn += stats.tokensIn;
       this.usage.tokensOut += stats.tokensOut;

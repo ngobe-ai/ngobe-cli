@@ -12,6 +12,8 @@ export class Tui implements Ui {
   private store: Store;
   private userInterrupt: () => boolean = () => false;
   private modeCycle: () => void = () => {};
+  private typing: () => void = () => {};
+  private lastTyping = 0;
   private instance: ReturnType<typeof render>;
 
   constructor(config: TuiConfig) {
@@ -27,6 +29,11 @@ export class Tui implements Ui {
           return handled;
         }}
         onModeCycle={() => this.modeCycle()}
+        onTyping={() => {
+          if (Date.now() - this.lastTyping < 5_000) return;
+          this.lastTyping = Date.now();
+          this.typing();
+        }}
       />,
       {exitOnCtrlC: false}, // Ctrl+C is routed through onInterrupt instead
     );
@@ -76,6 +83,9 @@ export class Tui implements Ui {
   }
   onModeCycle(cb: () => void): void {
     this.modeCycle = cb;
+  }
+  onTyping(cb: () => void): void {
+    this.typing = cb;
   }
   trust(dir: string): Promise<boolean> {
     return this.store.requestTrust(dir);

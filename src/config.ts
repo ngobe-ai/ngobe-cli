@@ -40,6 +40,8 @@ export interface Config {
   /** HTTP response cache. */
   cacheDir: string;
   memory: boolean;
+  /** Interactive sessions: have the server process the fixed prompt prefix before the first request. */
+  warmup: boolean;
   /** Tried in order; the next one is used only when one fails or finds nothing. */
   searchProviders: SearchProvider[];
   braveApiKey: string;
@@ -288,6 +290,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     stateDir,
     cacheDir,
     memory: bool(setting("MEMORY", "memory").raw, true),
+    warmup: bool(setting("WARMUP", "warmup").raw, true),
     searchProviders: searchProviders(setting("SEARCH_PROVIDERS", "searchProviders"), {
       brave: !!braveApiKey,
       tavily: !!tavilyApiKey,

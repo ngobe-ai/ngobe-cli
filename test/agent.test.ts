@@ -174,6 +174,40 @@ describe("agent loop", () => {
     expect(result.text).toBe("Let me check.");
   });
 
+  test("a command the model hands to the user to run is run with bash instead", async () => {
+    const { tool: shell, calls } = counter("bash", "exec", async () => "exit code 1\n1 failing");
+    shell.parameters = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
+    const reply =
+      "Sure, let's start by identifying the failing tests.\nFirst, let's run the tests to see which tests are failing:\n```bash\nnode --test\n```\nPlease provide the output of the test run so I can assist you further.";
+    const { agent, model } = setup([{ content: reply }, { content: "Fixed." }], [shell]);
+    const result = await agent.run("fix the failing tests", new AbortController().signal);
+    expect(calls).toEqual([{ command: "node --test" }]);
+    expect(result.text).toBe("Fixed.");
+    const assistant = (model.requests[1].messages as Message[]).find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe("Sure, let's start by identifying the failing tests.\nFirst, let's run the tests to see which tests are failing:");
+  });
+
+  test("instructions for the user are not run", async () => {
+    const { tool: shell, calls } = counter("bash", "exec");
+    const reply = "To start the server, run:\n```bash\nnpm start\n```\nThen open http://localhost:3000.";
+    const { agent } = setup([{ content: reply }], [shell]);
+    const result = await agent.run("how do I start it?", new AbortController().signal);
+    expect(calls).toEqual([]);
+    expect(result.text).toBe(reply);
+  });
+
+  test("warm-up sends the exact prompt prefix of a real request, asking for one token", async () => {
+    const { tool } = counter("probe");
+    const { agent, model } = setup([{ content: "." }, { content: "hi" }], [tool]);
+    await agent.warmup();
+    await agent.run("hello", new AbortController().signal);
+    const [warm, real] = model.requests;
+    expect(warm.max_tokens).toBe(1);
+    expect((warm.messages as Message[])[0]).toEqual((real.messages as Message[])[0]);
+    expect(warm.tools).toEqual(real.tools);
+    expect(agent.idleFor()).toBeLessThan(1000);
+  });
+
   test("shows each tool call running, then finished with a summary", async () => {
     const { tool } = counter("probe");
     tool.label = "Probe";

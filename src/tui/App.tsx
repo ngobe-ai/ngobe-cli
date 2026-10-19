@@ -29,6 +29,8 @@ interface Props {
   onInterrupt: () => boolean;
   /** shift+tab */
   onModeCycle?: () => void;
+  /** Any typing in the prompt (warms the model up again after a break). */
+  onTyping?: () => void;
 }
 
 const BAR_BG = "#1f2a37"; // dark input bar
@@ -36,7 +38,7 @@ const MAX_RENDERED_ENTRIES = 300; // keep long sessions snappy; older ones fall 
 const PREVIEW_LINES = 10;
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
-export function App({store, config, onInterrupt, onModeCycle}: Props) {
+export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) {
   useSyncExternalStore(store.subscribe, () => store.version);
   const {rows, columns} = useWindowSize();
   const {exit} = useApp();
@@ -133,6 +135,7 @@ export function App({store, config, onInterrupt, onModeCycle}: Props) {
           onModeCycle={onModeCycle}
           onCtrlC={onInterrupt}
           onActivity={() => {
+            onTyping?.();
             if (!stick) {
               setStick(true);
               setOffset(0);
