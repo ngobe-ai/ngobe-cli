@@ -117,3 +117,19 @@ describe("looser tool-call shapes (Qwen2.5-Coder and similar)", () => {
     expect(visibleLength("Sure. <func", false)).toBe(6);
   });
 });
+
+describe("holding back text-mode tool calls while streaming", () => {
+  test.each([
+    ['{"name": "grep"', 0],
+    ['  {"name"', 0],
+    ["Let me look.\n```json\n{", 13],
+    ["Let me look.\n{", 13],
+    ["The answer is 42.", 17],
+  ])("%p shows %p characters", (text, shown) => {
+    expect(visibleLength(text, false, true)).toBe(shown);
+  });
+
+  test("without holding back, JSON streams as usual", () => {
+    expect(visibleLength('{"a": 1}', false)).toBe(8);
+  });
+});

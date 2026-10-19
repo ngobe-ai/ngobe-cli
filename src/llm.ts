@@ -48,6 +48,8 @@ export class LLM {
   textTools: boolean;
   onNotice: (text: string) => void = () => {};
   private tunnel: Promise<string | null> | null = null;
+  /** Set once the model makes a native tool call; until then, JSON-looking text is held back while streaming. */
+  private nativeToolsSeen = false;
 
   constructor(private cfg: Config) {
     // The SDK timeout would cut long streams; the idle timer in attempt() bounds requests instead.
@@ -125,6 +127,7 @@ export class LLM {
     let firstTokenMs: number | null = null;
     let content = "";
     let shown = 0;
+    const holdJson = tools.length > 0 && !this.nativeToolsSeen;
     let usage: Usage | null = null;
     // Tool calls arrive in fragments keyed by index; stitch them back together.
     const partial = new Map<number, ToolCall>();
@@ -143,11 +146,12 @@ export class LLM {
 
         if (delta.content) {
           content += delta.content;
-          const upto = visibleLength(content, false);
+          const upto = visibleLength(content, false, holdJson);
           if (upto > shown) onText(content.slice(shown, upto));
           shown = Math.max(shown, upto);
         }
         for (const tc of delta.tool_calls ?? []) {
+          this.nativeToolsSeen = true;
           const cur = partial.get(tc.index) ?? { id: "", name: "", arguments: "" };
           if (tc.id) cur.id = tc.id;
           if (tc.function?.name) cur.name = tc.function.name;
@@ -164,22 +168,26 @@ export class LLM {
       clearTimeout(timer);
     }
 
-    const upto = visibleLength(content, true);
-    if (upto > shown) onText(content.slice(shown, upto));
-
     let toolCalls = [...partial.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([i, c]) => ({ ...c, id: c.id || `call_${Date.now()}_${i}` })); // some servers omit ids
     // Models (even with native tools on) sometimes write calls as text; accept those too.
     if (toolCalls.length === 0 && tools.length) {
       const parsed = parseTextToolCalls(content, tools.map((t) => t.name));
-      content = parsed.content;
-      toolCalls = parsed.calls.map((c, i) => ({ id: `call_${Date.now()}_${i}`, ...c }));
+      if (parsed.calls.length) {
+        content = parsed.content; // only the prose before the call is the reply
+        toolCalls = parsed.calls.map((c, i) => ({ id: `call_${Date.now()}_${i}`, ...c }));
+      }
     }
+    // Show what was held back while streaming, unless it turned out to be a tool call.
+    const upto = visibleLength(content, true);
+    if (upto > shown) onText(content.slice(shown, upto));
 
     const chars = (s: string) => Math.ceil(s.length / 4);
     usage ??= {
-      input: wire.reduce((n, m) => n + chars(typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")), 0),
+      input:
+        wire.reduce((n, m) => n + chars(typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")), 0) +
+        (toolDefs.length ? chars(JSON.stringify(toolDefs)) : 0),
       output: chars(content) + toolCalls.reduce((n, c) => n + chars(c.arguments), 0),
       estimated: true,
     };

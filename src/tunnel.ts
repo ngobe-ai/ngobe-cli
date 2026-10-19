@@ -78,7 +78,16 @@ export async function ensureTunnel(config: Pick<Config, "baseURL" | "sshTunnel" 
   if (!spec) return null;
   const via = `SSH tunnel ${spec.destination}${spec.sshPort ? `:${spec.sshPort}` : ""} → ${spec.target}`;
   if (await portOpen(spec.localHost, spec.localPort)) return `${via} (already open on ${spec.localPort})`;
+  try {
+    return await openTunnel(spec, via);
+  } catch (err) {
+    // Connection timeouts are often a passing network hiccup: try once more.
+    if (!/timed out/i.test(err instanceof Error ? err.message : "")) throw err;
+    return openTunnel(spec, via);
+  }
+}
 
+async function openTunnel(spec: TunnelSpec, via: string): Promise<string> {
   closeTunnel();
   let stderr = "";
   const proc = spawn("ssh", sshArgs(spec), { stdio: ["ignore", "ignore", "pipe"] });

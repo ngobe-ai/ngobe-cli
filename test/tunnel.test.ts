@@ -78,6 +78,17 @@ setInterval(() => {}, 1000);`);
     expect(await portOpen("127.0.0.1", port)).toBe(false);
   });
 
+  test("retries once when the connection times out", async () => {
+    const port = await freePort();
+    const counter = path.join(tmpDir(), "attempts");
+    fakeSsh(`const fs = require("node:fs"); const n = Number(fs.existsSync(${JSON.stringify(counter)}) ? fs.readFileSync(${JSON.stringify(counter)}, "utf8") : 0) + 1;
+fs.writeFileSync(${JSON.stringify(counter)}, String(n));
+if (n === 1) { console.error("ssh: connect to host 203.0.113.7 port 30620: Operation timed out"); process.exit(255); }
+const spec = process.argv[process.argv.indexOf("-L") + 1]; require("node:net").createServer().listen(Number(spec.split(":")[1]), "127.0.0.1"); setInterval(() => {}, 1000);`);
+    expect(await ensureTunnel({ ...base, baseURL: `http://127.0.0.1:${port}/v1` })).toContain("opened");
+    expect(fs.readFileSync(counter, "utf8")).toBe("2");
+  });
+
   test("explains a refused key", async () => {
     const port = await freePort();
     fakeSsh(`console.error("root@203.0.113.7: Permission denied (publickey)."); process.exit(255);`);

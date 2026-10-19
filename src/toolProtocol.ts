@@ -147,9 +147,17 @@ const TAGS = ["<tool_call", "<function"];
 /**
  * How much of streamed text is safe to show: everything before a <tool_call> or <function>
  * block, holding back a trailing fragment that might be the start of one ("<to…").
+ * With holdJson (models that write calls as plain JSON), also everything from a code fence or a
+ * line starting with "{": the caller shows it at the end of the turn if it wasn't a call.
  */
-export function visibleLength(content: string, final: boolean): number {
+export function visibleLength(content: string, final: boolean, holdJson = false): number {
   const cuts = TAGS.map((t) => content.indexOf(t)).filter((i) => i >= 0);
+  if (holdJson && !final) {
+    const fence = content.indexOf("```");
+    const brace = /(^|\n)[ \t]*\{/.exec(content);
+    if (fence >= 0) cuts.push(fence);
+    if (brace) cuts.push(brace.index + (brace[1] ? 1 : 0));
+  }
   if (cuts.length) return Math.min(...cuts);
   if (final) return content.length;
   for (let k = Math.min(Math.max(...TAGS.map((t) => t.length)) - 1, content.length); k > 0; k--) {

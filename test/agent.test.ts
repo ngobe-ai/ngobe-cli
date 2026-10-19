@@ -163,6 +163,23 @@ describe("agent loop", () => {
 });
 
 describe("model gateway", () => {
+  test("a bare JSON tool call is never shown to the user", async () => {
+    const { tool, calls } = counter("probe");
+    const { agent, log } = setup([{ content: '{"name": "probe", "arguments": {"n": 4}}' }, { content: "Found it." }], [tool]);
+    await agent.run("go", new AbortController().signal);
+    expect(calls).toEqual([{ n: 4 }]);
+    expect(log.text).not.toContain('"name"');
+    expect(log.text).toContain("Found it.");
+  });
+
+  test("estimated input tokens include the tool definitions", async () => {
+    const model = fakeModel([{ content: "ok" }]);
+    stops.push(model.stop);
+    const { tool } = counter("probe");
+    const turn = await new LLM(testConfig({ baseURL: model.baseURL })).chat([{ role: "user", content: "y".repeat(400) }], [tool], () => {});
+    expect(turn.usage.input).toBeGreaterThan(100);
+  });
+
   test("parses tool calls a model writes as text", async () => {
     const { tool, calls } = counter("probe");
     const { agent, log } = setup([{ content: 'Checking.<tool_call>{"name": "probe", "arguments": {"n": 2}}</tool_call>' }, { content: "done" }], [tool]);
