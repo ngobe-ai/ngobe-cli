@@ -34,4 +34,8 @@ Start with `ngobe doctor`; most problems show up there. `--debug` prints every t
 
 **`ngobe update` says "no permission".** The binary is somewhere you can't write (e.g. `/usr/local/bin`). Re-run with sudo, or reinstall into a directory you own with the install script.
 
+**"could not open the SSH tunnel".** The message says why: no key login (`ssh-copy-id -p <port> user@host`), an unknown host key (connect once with `ssh -p <port> user@host` and check it), or the local port in `baseURL` being taken (pick another).
+
+**Slow first answer with a model on a CPU server.** The first request of a session has to process about 2,700 tokens of tool definitions and instructions; at ~15 tokens/s that is around three minutes. Later turns reuse that work (llama.cpp prompt cache) as long as the model stays loaded. A smaller model (e.g. a 3B) is roughly twice as fast.
+
 **Interrupting.** Ctrl+C cancels the running request (including child processes of shell commands). In the chat, Ctrl+C with text typed clears it; at an empty prompt it quits.

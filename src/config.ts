@@ -17,6 +17,10 @@ export interface Config {
   model: string;
   /** Tried once when the main model is missing or unreachable. "" = none. */
   fallbackModel: string;
+  /** Reach the model server over SSH: "user@host" or "user@host:port" ("" = no tunnel). */
+  sshTunnel: string;
+  /** host:port of the model server as seen from the SSH host (default 127.0.0.1:<baseURL port>). */
+  sshTunnelTarget: string;
   /** native = OpenAI tool calling; text = <tool_call> protocol in the prompt; auto = native, switching to text if refused. */
   toolMode: ToolMode;
   mode: Mode;
@@ -112,6 +116,7 @@ Options:
 
 Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_BASE_URL, NGOBE_API_KEY, NGOBE_MODEL, NGOBE_FALLBACK_MODEL, NGOBE_TOOL_MODE,
+  NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
   NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
@@ -264,6 +269,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     apiKey: envVar(env, "API_KEY") ?? "not-needed",
     model: String(setting("MODEL", "model", values.model).raw ?? "qwen3-coder"),
     fallbackModel: String(setting("FALLBACK_MODEL", "fallbackModel").raw ?? ""),
+    sshTunnel: String(setting("SSH_TUNNEL", "sshTunnel").raw ?? ""),
+    sshTunnelTarget: String(setting("SSH_TUNNEL_TARGET", "sshTunnelTarget").raw ?? ""),
     toolMode: oneOf<ToolMode>(setting("TOOL_MODE", "toolMode"), ["auto", "native", "text"], "auto"),
     mode: oneOf<Mode>(setting("MODE", "mode", values.yolo ? "auto" : values.mode), MODES, "edit"),
     maxTurns: int(setting("MAX_TURNS", "maxTurns"), 40),

@@ -34,10 +34,9 @@ Then:
 
 `doctor` shows whether the endpoint answers, how long a tiny request takes, whether the model calls tools natively (otherwise the text protocol is used automatically), and the model's size against available memory where the server reports it.
 
-The Model Runner API has no authentication. Keep port 12434 bound to localhost or blocked by the firewall; never publish it. Docker-published ports bypass `ufw`, so check from another machine (`nc -z <server-ip> 12434` should fail). To use the server's models from your laptop, tunnel over SSH instead:
+The Model Runner API has no authentication. Keep port 12434 bound to localhost or blocked by the firewall; never publish it. Docker-published ports bypass `ufw`, so check from another machine (`nc -z <server-ip> 12434` should fail).
 
-    ssh -N -L 12434:127.0.0.1:12434 -p <ssh-port> user@<server>
-    NGOBE_BASE_URL=http://localhost:12434/engines/v1 ngobe doctor
+To use the server's models from your laptop, let Ngobe tunnel over SSH (configuration.md, "Models on your own server"): put `sshTunnel`, `sshTunnelTarget` and a local `baseURL` in `~/.config/ngobe/config.json` on the laptop, and `ngobe` opens and closes the tunnel by itself.
 
 ## 4. Memory budget on 11 GiB
 

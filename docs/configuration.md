@@ -20,6 +20,29 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 
 A hosted endpoint receives your prompts and code. `ngobe doctor` labels the endpoint local or remote.
 
+### Models on your own server, used from your laptop
+
+Docker Model Runner has no authentication, so it should only listen on the server's localhost. Ngobe can reach it through SSH instead of exposing it:
+
+| Variable | Config key | Meaning |
+|---|---|---|
+| `NGOBE_SSH_TUNNEL` | `sshTunnel` | `user@host` or `user@host:port` (an `~/.ssh/config` alias works too) |
+| `NGOBE_SSH_TUNNEL_TARGET` | `sshTunnelTarget` | The model server as seen from that host; default `127.0.0.1:<baseURL port>` |
+
+With a tunnel, `baseURL` must point at this machine; its port is the local end of the tunnel. Pick one that nothing else uses (Docker Desktop's own Model Runner may already have 12434 on your laptop):
+
+```json
+{
+  "baseURL": "http://127.0.0.1:12435/engines/v1",
+  "sshTunnel": "root@203.0.113.7:30620",
+  "sshTunnelTarget": "127.0.0.1:12434",
+  "model": "huggingface.co/bartowski/qwen2.5-coder-7b-instruct-gguf:Q4_K_M",
+  "requestTimeout": 900
+}
+```
+
+Ngobe opens `ssh -N -L …` on the first model request, reuses a tunnel that's already up, reopens it if it drops, and closes it when it exits. It uses SSH batch mode: key login only (set it up once with `ssh-copy-id`), no password prompts, and an unknown host key is refused (connect once by hand to accept it). Like the endpoint itself, the tunnel can only be set in your user config or environment, never by a project.
+
 ## Agent limits
 
 | Variable | Config key | Default | Meaning |

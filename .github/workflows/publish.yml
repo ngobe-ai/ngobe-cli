@@ -36,7 +36,8 @@ env:
 jobs:
   npm:
     name: npm
-    if: inputs.channels != 'homebrew'
+    # Repository variable NPM_PUBLISH=false pauses npm (e.g. until the @ngobe-ai npm org exists).
+    if: inputs.channels != 'homebrew' && vars.NPM_PUBLISH != 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: read

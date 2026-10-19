@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,7 +42,19 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
 
   // --- model -----------------------------------------------------------------------
   const llm = new LLM(config);
-  const where = isLocalEndpoint(config.baseURL) ? "local" : yellow("remote: prompts and code are sent to this host");
+  if (config.sshTunnel) {
+    try {
+      console.log(`${bold("tunnel ")} ${ok((await llm.ready()) ?? "")}`);
+    } catch (err) {
+      console.log(`${bold("tunnel ")} ${bad(message(err))}`);
+      return 1;
+    }
+  }
+  const where = config.sshTunnel
+    ? `your server, through SSH to ${config.sshTunnel}`
+    : isLocalEndpoint(config.baseURL)
+      ? "local"
+      : yellow("remote: prompts and code are sent to this host");
   let models: ModelInfo[] = [];
   try {
     const [list, ms] = await timed(() => llm.models());
@@ -67,7 +79,13 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
       healthy = false;
       console.log(`         ${bad(`${config.model} failed: ${message(err)}`)}`);
     }
-    for (const line of await modelResources(config, models, mem)) console.log(`         ${line}`);
+    // Memory fit only means something when the model runs on this machine.
+    if (!config.sshTunnel && isLocalEndpoint(config.baseURL)) {
+      for (const line of await modelResources(config, models, mem)) console.log(`         ${line}`);
+    } else {
+      const m = models.find((x) => x.id === config.model)?.raw.dmr as { size?: string; parameters?: string; context_window?: number } | undefined;
+      if (m) console.log(dim(`         ${[m.parameters && `${m.parameters} params`, m.size, m.context_window && `${m.context_window}-token context`].filter(Boolean).join(", ")} (runs on the server)`));
+    }
   }
   if (config.fallbackModel) console.log(dim(`         fallback model: ${config.fallbackModel}`));
 
@@ -117,13 +135,26 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
   return healthy ? 0 : 1;
 }
 
-/** Memory the OS can hand out now (Linux MemAvailable counts reclaimable cache; os.freemem doesn't). */
+/**
+ * Memory the OS can hand out now. os.freemem leaves out reclaimable caches: Linux reports them
+ * as MemAvailable, macOS as inactive, speculative and purgeable pages (vm_stat).
+ */
 function availableMemory(): number {
   try {
     const m = /MemAvailable:\s+(\d+) kB/.exec(fs.readFileSync("/proc/meminfo", "utf8"));
     if (m) return Number(m[1]) * 1024;
   } catch {
     // not Linux
+  }
+  if (os.platform() === "darwin") {
+    try {
+      const out = execFileSync("vm_stat", { encoding: "utf8", timeout: 3000 });
+      const pageSize = Number(/page size of (\d+) bytes/.exec(out)?.[1] ?? 4096);
+      const pages = (label: string) => Number(new RegExp(`Pages ${label}:\\s+(\\d+)`).exec(out)?.[1] ?? 0);
+      return (pages("free") + pages("inactive") + pages("speculative") + pages("purgeable")) * pageSize;
+    } catch {
+      // fall through
+    }
   }
   return os.freemem();
 }
@@ -157,7 +188,11 @@ async function modelResources(config: Config, models: ModelInfo[], available: nu
   // Weights plus KV cache and runtime overhead; 1.5 GiB is a conservative allowance for 8-16k context.
   const need = size + 1.5 * 1024 ** 3;
   const line = `weights ${gib(size)}${detail ? ` (${detail})` : ""}; ~${gib(need)} with KV cache`;
-  out.push(need > os.totalmem() * 0.85 ? bad(`${line}: too large for ${gib(os.totalmem())} RAM`) : need > available ? warn(`${line}: more than the ${gib(available)} free now`) : ok(line));
+  // Free memory can't tell us whether this model is already loaded (and so already counted as
+  // used), so judge the fit by total RAM and report free memory separately.
+  if (need > os.totalmem() * 0.85) out.push(bad(`${line}: too large for ${gib(os.totalmem())} RAM`));
+  else out.push(ok(`${line}; fits in ${gib(os.totalmem())} RAM (${gib(available)} free right now)`));
+  if (available < 1024 ** 3) out.push(warn(`only ${gib(available)} free: the system is short of memory`));
   return out;
 }
 

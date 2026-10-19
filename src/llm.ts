@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { Config } from "./config.js";
 import type { Message, Tool } from "./types.js";
 import { parseTextToolCalls, textProtocolPrompt, toTextMessages, visibleLength } from "./toolProtocol.js";
+import { ensureTunnel } from "./tunnel.js";
 
 export interface ToolCall {
   id: string;
@@ -46,6 +47,7 @@ export class LLM {
   /** Text tool protocol: configured, or switched on after the endpoint rejected native tools. */
   textTools: boolean;
   onNotice: (text: string) => void = () => {};
+  private tunnel: Promise<string | null> | null = null;
 
   constructor(private cfg: Config) {
     // The SDK timeout would cut long streams; the idle timer in attempt() bounds requests instead.
@@ -53,11 +55,36 @@ export class LLM {
     this.textTools = cfg.toolMode === "text";
   }
 
+  /** Open the SSH tunnel, if one is configured, before the first request. */
+  async ready(): Promise<string | null> {
+    if (!this.cfg.sshTunnel) return null;
+    if (!this.tunnel) {
+      this.tunnel = ensureTunnel(this.cfg).then(
+        (status) => {
+          if (status?.includes("opened")) this.onNotice(status);
+          return status;
+        },
+        (err) => {
+          this.tunnel = null;
+          throw err;
+        },
+      );
+    }
+    return this.tunnel;
+  }
+
   async chat(messages: Message[], tools: Tool[], onText: (chunk: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
+    await this.ready();
     try {
       return await this.attempt(this.cfg.model, messages, tools, onText, signal);
     } catch (err) {
       if (signal?.aborted) throw err;
+      // The tunnel dropped (laptop slept, network changed, another ngobe that owned it exited): reopen once.
+      if (this.cfg.sshTunnel && err instanceof OpenAI.APIConnectionError) {
+        this.tunnel = null;
+        await this.ready();
+        return this.attempt(this.cfg.model, messages, tools, onText, signal);
+      }
       if (this.cfg.toolMode === "auto" && !this.textTools && tools.length && rejectsTools(err)) {
         this.textTools = true;
         this.onNotice("The endpoint refused native tool calling; using the text tool protocol for this session.");
@@ -144,8 +171,8 @@ export class LLM {
       .sort((a, b) => a[0] - b[0])
       .map(([i, c]) => ({ ...c, id: c.id || `call_${Date.now()}_${i}` })); // some servers omit ids
     // Models (even with native tools on) sometimes write calls as text; accept those too.
-    if (toolCalls.length === 0 && content.includes("<tool_call")) {
-      const parsed = parseTextToolCalls(content);
+    if (toolCalls.length === 0 && tools.length) {
+      const parsed = parseTextToolCalls(content, tools.map((t) => t.name));
       content = parsed.content;
       toolCalls = parsed.calls.map((c, i) => ({ id: `call_${Date.now()}_${i}`, ...c }));
     }
@@ -164,6 +191,7 @@ export class LLM {
    * (or write them as text, which the gateway parses)?
    */
   async probe(timeoutMs = 180_000): Promise<{ ms: number; toolCalls: "native" | "text" | "none" | "unsupported"; text: string }> {
+    await this.ready();
     const started = Date.now();
     const messages: Message[] = [{ role: "user", content: "Call the ping tool now." }];
     const ping: OpenAI.Chat.ChatCompletionTool = {
@@ -175,7 +203,7 @@ export class LLM {
       const res = await this.client.chat.completions.create({ model: this.cfg.model, messages, tools: [ping], max_tokens: 96 }, opts);
       const msg = res.choices[0]?.message;
       const text = msg?.content ?? "";
-      const toolCalls = msg?.tool_calls?.length ? "native" : text.includes("<tool_call") ? "text" : "none";
+      const toolCalls = msg?.tool_calls?.length ? "native" : parseTextToolCalls(text, ["ping"]).calls.length ? "text" : "none";
       return { ms: Date.now() - started, toolCalls, text };
     } catch (err) {
       if (!rejectsTools(err)) throw err;
@@ -186,6 +214,7 @@ export class LLM {
 
   /** Models the endpoint serves, with whatever metadata it reports. */
   async models(timeoutMs = 10_000): Promise<ModelInfo[]> {
+    await this.ready();
     const out: ModelInfo[] = [];
     for await (const m of this.client.models.list({ timeout: timeoutMs, maxRetries: 0 })) {
       out.push({ id: m.id, raw: m as unknown as Record<string, unknown> });

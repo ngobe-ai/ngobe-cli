@@ -33,14 +33,72 @@ const BLOCK = /<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/g;
  * (<tool_call><function=name><parameter=key>value</parameter></function></tool_call>).
  * A block that can't be parsed still becomes a call with its raw text as arguments, so
  * the model is told it was malformed instead of the call vanishing.
+ *
+ * Given the names of the tools on offer, looser shapes are accepted too (see parseLoose).
  */
-export function parseTextToolCalls(text: string): { content: string; calls: TextToolCall[] } {
+export function parseTextToolCalls(text: string, known?: string[]): { content: string; calls: TextToolCall[] } {
   const calls: TextToolCall[] = [];
   for (const m of text.matchAll(BLOCK)) {
     const body = m[1].trim();
     if (body) calls.push(parseBlock(body));
   }
-  return { content: text.replace(BLOCK, "").trim(), calls };
+  if (calls.length || !known?.length) return { content: text.replace(BLOCK, "").trim(), calls };
+  return parseLoose(text, known);
+}
+
+// Where models without a proper tool template (e.g. Qwen2.5-Coder) put a JSON call.
+const OPENERS = /<function>|<tools?>|```(?:json|xml|tool_call|javascript|js)?[ \t]*\r?\n?/g;
+
+/**
+ * JSON tool calls wrapped in <function>, <tools>, a fenced code block, or making up the whole
+ * reply. Accepted only when the name is a tool on offer; the agent still validates the
+ * arguments and checks permissions, exactly as for native calls.
+ */
+function parseLoose(text: string, known: string[]): { content: string; calls: TextToolCall[] } {
+  const calls: TextToolCall[] = [];
+  let first = -1;
+  const consider = (brace: number, start: number) => {
+    const json = balancedObject(text, brace);
+    const call = json ? asCall(json, known) : null;
+    if (!call) return;
+    calls.push(call);
+    if (first < 0) first = start;
+  };
+  for (const m of text.matchAll(OPENERS)) {
+    const after = m.index + m[0].length;
+    const brace = text.indexOf("{", after);
+    if (brace >= 0 && text.slice(after, brace).trim() === "") consider(brace, m.index);
+  }
+  if (calls.length === 0 && text.trimStart().startsWith("{")) consider(text.indexOf("{"), 0);
+  return calls.length ? { content: text.slice(0, first).trim(), calls } : { content: text, calls: [] };
+}
+
+/** The JSON object starting at text[start] (a "{"), matching braces outside strings. */
+function balancedObject(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
+function asCall(json: string, known: string[]): TextToolCall | null {
+  try {
+    const p = JSON.parse(json) as { name?: unknown; arguments?: unknown; parameters?: unknown; function?: { name?: unknown; arguments?: unknown } };
+    const name = p.name ?? p.function?.name;
+    if (typeof name !== "string" || !known.includes(name)) return null;
+    const args = p.arguments ?? p.parameters ?? p.function?.arguments ?? {};
+    return { name, arguments: typeof args === "string" ? args : JSON.stringify(args) };
+  } catch {
+    return null;
+  }
 }
 
 function parseBlock(body: string): TextToolCall {
@@ -84,18 +142,19 @@ export function toTextMessages(messages: Message[]): Message[] {
   return out;
 }
 
-const TAG = "<tool_call";
+const TAGS = ["<tool_call", "<function"];
 
 /**
- * How much of streamed text is safe to show: everything before a <tool_call> block, holding
- * back a trailing fragment that might be the start of one ("<to…").
+ * How much of streamed text is safe to show: everything before a <tool_call> or <function>
+ * block, holding back a trailing fragment that might be the start of one ("<to…").
  */
 export function visibleLength(content: string, final: boolean): number {
-  const cut = content.indexOf(TAG);
-  if (cut >= 0) return cut;
+  const cuts = TAGS.map((t) => content.indexOf(t)).filter((i) => i >= 0);
+  if (cuts.length) return Math.min(...cuts);
   if (final) return content.length;
-  for (let k = Math.min(TAG.length - 1, content.length); k > 0; k--) {
-    if (TAG.startsWith(content.slice(-k))) return content.length - k;
+  for (let k = Math.min(Math.max(...TAGS.map((t) => t.length)) - 1, content.length); k > 0; k--) {
+    const tail = content.slice(-k);
+    if (TAGS.some((t) => t.startsWith(tail))) return content.length - k;
   }
   return content.length;
 }

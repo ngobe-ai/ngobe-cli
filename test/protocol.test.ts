@@ -74,3 +74,46 @@ describe("text tool-call protocol", () => {
     expect(out[2].content).toContain("No matches.");
   });
 });
+
+describe("looser tool-call shapes (Qwen2.5-Coder and similar)", () => {
+  const known = ["read_file", "bash", "grep"];
+
+  test.each([
+    ["fenced as xml", '```xml\n{"name": "read_file", "arguments": {"path": "README.md"}}\n```'],
+    ["fenced as json", 'I will read it.\n```json\n{"name": "read_file", "arguments": {"path": "README.md"}}\n```'],
+    ["<function> wrapper", '<function>\n {"name": "read_file", "arguments": {"path": "README.md"}}\n</function>'],
+    ["unterminated <function>", '<function>\n {"name": "read_file", "arguments": {"path": "README.md"}}'],
+    ["<tools> wrapper", '<tools>{"name": "read_file", "arguments": {"path": "README.md"}}</tools>'],
+    ["the whole reply", '{"name": "read_file", "arguments": {"path": "README.md"}}'],
+    ["OpenAI-style function object", '{"function": {"name": "read_file", "arguments": {"path": "README.md"}}}'],
+  ])("%s", (_label, text) => {
+    expect(parseTextToolCalls(text, known).calls).toEqual([{ name: "read_file", arguments: '{"path":"README.md"}' }]);
+  });
+
+  test("nested braces and braces inside strings", () => {
+    const text = '```json\n{"name": "bash", "arguments": {"command": "echo \\"{not json}\\" && ls"}}\n```';
+    expect(parseTextToolCalls(text, known).calls).toEqual([{ name: "bash", arguments: JSON.stringify({ command: 'echo "{not json}" && ls' }) }]);
+  });
+
+  test("several fenced calls", () => {
+    const text = '```json\n{"name": "grep", "arguments": {"pattern": "a"}}\n```\n```json\n{"name": "grep", "arguments": {"pattern": "b"}}\n```';
+    expect(parseTextToolCalls(text, known).calls.map((c) => c.arguments)).toEqual(['{"pattern":"a"}', '{"pattern":"b"}']);
+  });
+
+  test("the prose before a call is kept as the reply", () => {
+    expect(parseTextToolCalls('Let me check.\n```json\n{"name": "grep", "arguments": {"pattern": "x"}}\n```', known).content).toBe("Let me check.");
+  });
+
+  test.each([
+    ["an unknown tool name", '```json\n{"name": "delete_everything", "arguments": {}}\n```'],
+    ["ordinary JSON in an answer", '```json\n{"version": "1.2.3", "name": "my-package"}\n```'],
+    ["no tool list given", '```json\n{"name": "read_file", "arguments": {}}\n```'],
+  ])("not a call: %s", (label, text) => {
+    expect(parseTextToolCalls(text, label === "no tool list given" ? undefined : known).calls).toEqual([]);
+  });
+
+  test("hides a <function> call from streamed text", () => {
+    expect(visibleLength("Sure. <function>\n{", false)).toBe(6);
+    expect(visibleLength("Sure. <func", false)).toBe(6);
+  });
+});
