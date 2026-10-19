@@ -1,0 +1,22 @@
+{
+  "name": "mugamba",
+  "version": "0.1.0",
+  "description": "Mugamba: a minimal coding agent CLI for OpenAI-compatible endpoints (Ollama, llama.cpp, vLLM, hosted providers)",
+  "type": "module",
+  "bin": {
+    "mugamba": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "openai": "^7.39.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
