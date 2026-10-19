@@ -15,7 +15,8 @@ What exists, how it was verified, and what is not done. "Verified" means by the 
 | Learning | Run outcomes, tool reliability, failure clustering, learned test/build commands, source preference, prompt variants with benchmark-gated promotion and rollback | Tests; benchmark pipeline exercised end to end with a scripted model |
 | Evaluation | 12 tasks covering the ten scenarios in the spec, deterministic checks, must-pass safety tasks | Pipeline only. No real model has been scored yet |
 | Diagnostics | `ngobe doctor`, audit log with redaction, `--debug` | Run manually against a scripted model |
-| CLI | `ask plan code fix review test search docs version memory learn benchmark doctor config`, back-compat with `mugamba` and `MUGAMBA_*` | Tests and manual runs |
+| CLI | `ask plan code fix review test search docs version memory learn benchmark doctor config update`, back-compat with `mugamba` and `MUGAMBA_*` | Tests and manual runs |
+| Distribution | Standalone binaries (linux x64 / x64-baseline / arm64, macOS arm64 / x64) via `install.sh` with SHA-256 checks, `ngobe update`, npm package, Homebrew formula; CI and release workflows | Locally: all five targets built; macOS binary run end to end; install.sh from a local mirror (and refusing a bad checksum); update 0.2.0 → 0.2.1; formula installed from a local tap with `brew test`; npm tarball installed globally; workflows pass actionlint. Not yet run on GitHub |
 
 ## Security review
 

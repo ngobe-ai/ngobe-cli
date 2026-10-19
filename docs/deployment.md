@@ -4,14 +4,17 @@ Target used for sizing: 6 vCPUs, ~11 GiB RAM, CPU-only inference through Docker 
 
 ## 1. Runtime
 
-Ngobe needs Node.js 22.13 or newer (the built-in `node:sqlite` that memory uses needs a flag before 22.13), or Bun (tested with 1.3). Check with `node --version`. Optional but recommended: `ripgrep` (`apt install ripgrep`) for fast grep, and `git`.
+The standalone binary needs nothing else. Optional but recommended: `ripgrep` (`apt install ripgrep`) for fast grep, and `git`.
 
 ## 2. Install
 
-    sudo git clone https://github.com/ngobe-ai/ngobe-cli /opt/ngobe-cli
-    cd /opt/ngobe-cli/cli
-    npm ci && npm run build
-    sudo npm link            # puts `ngobe` (and the old `mugamba`) on PATH
+    curl -fsSL https://raw.githubusercontent.com/ngobe-ai/ngobe-cli/main/install.sh | sh
+    ngobe --version
+
+The script picks the right build (including the "baseline" x64 build for CPUs or VMs without AVX2), verifies its SHA-256 and installs to `~/.local/bin`. Alternatives: `npm install -g ngobe` (needs Node.js 22.13+), or from source into `/opt/ngobe-cli`:
+
+    sudo git clone https://github.com/ngobe-ai/ngobe-cli /opt/ngobe-cli && cd /opt/ngobe-cli
+    npm ci && npm run build && sudo npm link    # puts `ngobe` (and the old `mugamba`) on PATH
 
 Run it as your normal user, not root: the agent's commands run with your permissions.
 
@@ -30,7 +33,10 @@ Then:
 
 `doctor` shows whether the endpoint answers, how long a tiny request takes, whether the model calls tools natively (otherwise the text protocol is used automatically), and the model's size against available memory where the server reports it.
 
-The Model Runner API has no authentication. Keep port 12434 bound to localhost or blocked by the firewall; never publish it.
+The Model Runner API has no authentication. Keep port 12434 bound to localhost or blocked by the firewall; never publish it. Docker-published ports bypass `ufw`, so check from another machine (`nc -z <server-ip> 12434` should fail). To use the server's models from your laptop, tunnel over SSH instead:
+
+    ssh -N -L 12434:127.0.0.1:12434 -p <ssh-port> user@<server>
+    NGOBE_BASE_URL=http://localhost:12434/engines/v1 ngobe doctor
 
 ## 4. Memory budget on 11 GiB
 
@@ -52,9 +58,10 @@ Version, release-note and advisory lookups reach the official hosts directly (no
 
 ## 7. Upgrade
 
-    cd /opt/ngobe-cli && git pull
-    cd cli && npm ci && npm run build
+    ngobe update        # standalone install; `ngobe doctor` says when one is available
     ngobe doctor
+
+npm installs: `npm install -g ngobe@latest`. Source installs: `cd /opt/ngobe-cli && git pull && npm ci && npm run build`.
 
 The memory schema is created with `create table if not exists`; upgrades keep existing data.
 

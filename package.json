@@ -2,6 +2,7 @@
   "name": "ngobe",
   "version": "0.2.0",
   "description": "Ngobe: a resource-efficient coding agent CLI for local OpenAI-compatible models (Docker Model Runner, llama.cpp, Ollama, vLLM) with live official-source verification, safe tools and measured self-improvement",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "ngobe": "dist/index.js",
@@ -9,10 +10,10 @@
   },
   "files": [
     "dist",
-    "bench",
     "docs",
     "config.example.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22.13"
@@ -21,11 +22,31 @@
     "type": "git",
     "url": "https://github.com/ngobe-ai/ngobe-cli.git"
   },
+  "homepage": "https://github.com/ngobe-ai/ngobe-cli#readme",
+  "bugs": {
+    "url": "https://github.com/ngobe-ai/ngobe-cli/issues"
+  },
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "cli",
+    "llm",
+    "local-llm",
+    "docker-model-runner",
+    "llama.cpp",
+    "ollama",
+    "openai-compatible"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "bun src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "build:binaries": "bun scripts/build-binaries.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",

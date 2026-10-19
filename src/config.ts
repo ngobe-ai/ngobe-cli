@@ -61,10 +61,16 @@ export const COMMANDS = [
   "benchmark",
   "doctor",
   "config",
+  "update",
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
-export const VERSION: string = createRequire(import.meta.url)("../package.json").version;
+// Standalone binaries have no package.json beside them: the build script defines this.
+declare const NGOBE_BUILD_VERSION: string | undefined;
+export const VERSION: string =
+  typeof NGOBE_BUILD_VERSION === "string" ? NGOBE_BUILD_VERSION : createRequire(import.meta.url)("../package.json").version;
+/** True in the standalone binaries built by scripts/build-binaries.ts (not the npm package). */
+export const STANDALONE = typeof NGOBE_BUILD_VERSION === "string";
 
 export const HELP = `Usage: ngobe [command] [options] [prompt]
 
@@ -90,6 +96,7 @@ Direct commands (no model needed):
                          run the evaluation set against the configured model
   doctor                 check model endpoint, tools, search, memory and system resources
   config                 show the effective configuration (secrets redacted)
+  update                 update to the latest release (or print how, for npm/Homebrew installs)
 
 Options:
   -m, --model <name>     model name

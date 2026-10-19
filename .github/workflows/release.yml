@@ -1,0 +1,173 @@
+name: Release
+
+# Push a tag like v0.3.0 (npm version minor && git push --follow-tags) to publish:
+# standalone binaries + SHA256SUMS on GitHub Releases, the npm package, and the Homebrew formula.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  check:
+    name: Tag matches package.json
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          case "$pkg" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
+
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [check, test]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-latest, runs: true }
+          - { target: linux-x64-baseline, runner: ubuntu-latest, runs: true }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, runs: true }
+          - { target: darwin-arm64, runner: macos-latest, runs: true }
+          # Built on Apple Silicon (so it is signed); there is no Intel runner to run it on.
+          - { target: darwin-x64, runner: macos-latest, runs: false }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/build-binaries.ts ${{ matrix.target }}
+      - name: Run it
+        if: matrix.runs
+        run: test "$(dist-bin/ngobe-${{ matrix.target }}/ngobe --version)" = "${{ needs.check.outputs.version }}"
+      - name: Check the code signature
+        if: runner.os == 'macOS'
+        run: codesign --verify --verbose dist-bin/ngobe-${{ matrix.target }}/ngobe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ngobe-${{ matrix.target }}
+          path: dist-bin/ngobe-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  github:
+    name: GitHub Release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ngobe-*
+          path: dist-bin
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist-bin
+          sha256sum ngobe-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--title "ngobe ${{ needs.check.outputs.version }}" --generate-notes --verify-tag)
+          if [ "${{ needs.check.outputs.prerelease }}" = true ]; then args+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist-bin/ngobe-*.tar.gz dist-bin/SHA256SUMS install.sh "${args[@]}"
+
+  npm:
+    name: npm publish
+    needs: [check, github]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is not set; skipping npm publish (see docs/releasing.md)"
+            exit 0
+          fi
+          tag=latest
+          if [ "${{ needs.check.outputs.prerelease }}" = true ]; then tag=next; fi
+          npm publish --provenance --access public --tag "$tag"
+
+  homebrew:
+    name: Homebrew tap
+    needs: [check, github]
+    if: needs.check.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Update Formula/ngobe.rb in ngobe-ai/homebrew-tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap (see docs/releasing.md)"
+            exit 0
+          fi
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir dist-bin
+          bun scripts/homebrew-formula.ts "${{ needs.check.outputs.version }}" dist-bin/SHA256SUMS > ngobe.rb
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/ngobe-ai/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp ngobe.rb tap/Formula/ngobe.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/ngobe.rb
+          git commit -m "ngobe ${{ needs.check.outputs.version }}"
+          git push
+
+  verify:
+    name: Install from the release (${{ matrix.os }})
+    needs: [check, github]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: curl | sh, exactly as users will
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh" | NGOBE_VERSION="${{ needs.check.outputs.version }}" sh
+          test "$("$HOME/.local/bin/ngobe" --version)" = "${{ needs.check.outputs.version }}"

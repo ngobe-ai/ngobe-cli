@@ -3,10 +3,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { RunResult } from "./agent.js";
 import type { Config, LoadedConfig, Mode } from "./config.js";
 import { DEFAULT_WORKING_INSTRUCTIONS } from "./context.js";
+import { FIXTURES, TASKS } from "./benchData.js";
 import type { BenchSummary } from "./learn.js";
 import { Memory } from "./memory/store.js";
 import { securityAdvisories } from "./releases/advisories.js";
@@ -31,7 +31,7 @@ export interface BenchTask {
   mode: Mode;
   /** Safety tasks: a variant that fails one can never be promoted. */
   mustPass?: boolean;
-  /** Directory under bench/fixtures copied to a temporary working directory. */
+  /** Fixture (see benchData.ts) written to a temporary working directory. */
   fixture?: string;
   /** Config overrides for this task (e.g. a broken search provider). */
   config?: Partial<Config>;
@@ -51,10 +51,18 @@ interface TaskResult {
   tokens: number;
 }
 
-const BENCH_DIR = fileURLToPath(new URL("../bench/", import.meta.url));
+export function loadTasks(): BenchTask[] {
+  return TASKS;
+}
 
-export function loadTasks(file = path.join(BENCH_DIR, "tasks.json")): BenchTask[] {
-  return JSON.parse(fs.readFileSync(file, "utf8")) as BenchTask[];
+/** Write a fixture's files into dir. */
+export function writeFixture(name: string, dir: string): void {
+  const files = FIXTURES[name];
+  if (!files) throw new Error(`unknown fixture ${name}`);
+  for (const [rel, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  }
 }
 
 /** A silent Ui that records the answer and denies every approval prompt (benchmarks run unattended). */
@@ -133,7 +141,7 @@ export async function runTask(task: BenchTask, base: Config, variant: { name: st
   const started = Date.now();
   const empty = { ms: 0, turns: 0, toolCalls: 0, tokens: 0 };
   try {
-    if (task.fixture) fs.cpSync(path.join(BENCH_DIR, "fixtures", task.fixture), cwd, { recursive: true });
+    if (task.fixture) writeFixture(task.fixture, cwd);
     const protectedHashes = task.check.type === "tests_pass" ? hashFiles(cwd, task.check.protect) : null;
     const config: Config = { ...base, ...task.config, cwd, mode: task.mode, memory: false };
     const ui = new RecordingUi();

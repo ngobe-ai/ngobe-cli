@@ -1,0 +1,24 @@
+name: Live sources
+
+# The version, release-note and advisory tools depend on official endpoints whose formats can
+# change without notice. Check them against the real services every day.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - run: bun test test/live.test.ts
+        env:
+          NGOBE_LIVE: "1"

@@ -26,4 +26,12 @@ Start with `ngobe doctor`; most problems show up there. `--debug` prints every t
 
 **grep is slow.** Install ripgrep; without it a JavaScript fallback is used. Patterns ripgrep can't parse (lookbehind, backreferences) also use the fallback.
 
+**Install script: "not on your PATH".** Add the printed `export PATH=…` line to your shell profile and open a new shell.
+
+**Install script on Alpine/musl.** The prebuilt binaries need glibc; use `npm install -g ngobe` with Node 22.13+.
+
+**"CPU lacks AVX support" warning on macOS.** You're running the Intel build under Rosetta. Reinstall with the install script from a native (arm64) shell, or `brew reinstall ngobe`; it picks the Apple Silicon build.
+
+**`ngobe update` says "no permission".** The binary is somewhere you can't write (e.g. `/usr/local/bin`). Re-run with sudo, or reinstall into a directory you own with the install script.
+
 **Interrupting.** Ctrl+C cancels the running request (including child processes of shell commands). In the chat, Ctrl+C with text typed clears it; at an empty prompt it quits.

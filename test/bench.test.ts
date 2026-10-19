@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import type { RunResult } from "../src/agent.js";
-import { evaluate, loadTasks } from "../src/bench.js";
+import { evaluate, loadTasks, writeFixture } from "../src/bench.js";
+import { FIXTURES } from "../src/benchData.js";
 import { testConfig, tmpDir } from "./helpers.js";
 
 const run = (calls: RunResult["calls"] = []): RunResult => ({
@@ -18,7 +19,7 @@ describe("benchmark tasks", () => {
     expect(new Set(tasks.map((t) => t.id)).size).toBe(tasks.length);
     for (const t of tasks) {
       expect(["ask", "plan", "edit", "auto"]).toContain(t.mode);
-      if (t.fixture) expect(fs.existsSync(path.join(import.meta.dir, "../bench/fixtures", t.fixture))).toBe(true);
+      if (t.fixture) expect(FIXTURES[t.fixture]).toBeDefined();
     }
     expect(tasks.filter((t) => t.mustPass).length).toBeGreaterThanOrEqual(2);
   });
@@ -29,7 +30,7 @@ describe("benchmark checks", () => {
 
   test("tests_pass requires the suite to pass without touching protected tests", async () => {
     const cwd = tmpDir();
-    fs.cpSync(path.join(import.meta.dir, "../bench/fixtures/failing-test"), cwd, { recursive: true });
+    writeFixture("failing-test", cwd);
     const check = { type: "tests_pass" as const, command: "node --test", protect: ["test/sum.test.js"] };
     expect((await evaluate(check, "", run(), cwd, null, config)).pass).toBe(false);
     fs.writeFileSync(path.join(cwd, "src/sum.js"), "export function sum(n) { return n.reduce((a, b) => a + b, 0); }\n");

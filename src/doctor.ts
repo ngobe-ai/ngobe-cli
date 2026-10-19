@@ -9,6 +9,7 @@ import { latestVersion } from "./releases/versions.js";
 import { buildTools } from "./tools/index.js";
 import { bold, dim, green, red, yellow } from "./ui.js";
 import { httpJson } from "./web/http.js";
+import { updateNotice } from "./update.js";
 import { webSearch } from "./web/search.js";
 
 const ok = (s: string) => `${green("✓")} ${s}`;
@@ -28,6 +29,12 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
   const runtime = typeof (globalThis as { Bun?: { version: string } }).Bun !== "undefined" ? `bun ${(globalThis as unknown as { Bun: { version: string } }).Bun.version}` : `node ${process.version}`;
   const mem = availableMemory();
   console.log(bold(`ngobe ${VERSION}`) + dim(` (${runtime}, ${os.platform()} ${os.arch()}, ${os.cpus().length} CPUs, ${gib(mem)} available of ${gib(os.totalmem())} RAM)`));
+  try {
+    const notice = await updateNotice(loaded);
+    if (notice) console.log(`        ${warn(notice)}`);
+  } catch (err) {
+    console.log(dim(`        could not check for updates: ${message(err)}`));
+  }
 
   const file = configFilePath();
   console.log(`${bold("config ")} ${fs.existsSync(file) ? file : dim(`${file} (none; environment and defaults)`)}; mode ${config.mode}, tool calling ${config.toolMode}`);

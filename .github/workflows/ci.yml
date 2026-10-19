@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # the release workflow runs these checks before building anything
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Smoke test the npm build on Node (node:sqlite memory)
+        run: node scripts/smoke-node.mjs
+
+  npm-package:
+    name: npm package installs (Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Pack and install globally, as `npm install -g ngobe` would
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm install -g --prefix "$RUNNER_TEMP/global" "$RUNNER_TEMP"/ngobe-*.tgz
+          node scripts/smoke-node.mjs "$RUNNER_TEMP/global/bin/ngobe"
+          "$RUNNER_TEMP/global/bin/mugamba" --version
+
+  binary:
+    name: Standalone binary and install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: shellcheck install.sh
+      - run: bun scripts/build-binaries.ts linux-x64
+      - name: Smoke test the binary
+        run: node scripts/smoke-node.mjs dist-bin/ngobe-linux-x64/ngobe
+      - name: Install it with install.sh from a local mirror
+        run: |
+          (cd dist-bin && python3 -m http.server 8711 >/dev/null 2>&1 &)
+          sleep 1
+          NGOBE_DOWNLOAD_BASE=http://localhost:8711 NGOBE_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          test "$("$RUNNER_TEMP/bin/ngobe" --version)" = "$(node -p "require('./package.json').version")"

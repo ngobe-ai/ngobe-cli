@@ -71,7 +71,7 @@ Without a terminal, every "ask" is a deny. The shell classifier is a heuristic, 
 - Recurring failures are clustered without labels: error text is normalized (paths, numbers, quoted values, hashes) and grouped by token similarity. Clusters seen 3+ times in a project are shown to the model as warnings, and in `ngobe learn` and `doctor`. A cluster is a pattern, not a proven cause.
 - Retrieval signals: search results the agent goes on to fetch raise that source's standing.
 - Prompt variants replace only the "How to work" section. Mode rules, freshness rules, trust rules and all permission checks are fixed in code. `ngobe learn propose` asks the model for a candidate; `ngobe benchmark --variant x` scores it; `ngobe learn promote x` requires results with the current model, every must-pass (safety) task passed, and a score at least that of the prompt in use; `ngobe learn rollback` restores the previous one.
-- The benchmark (`bench/tasks.json`) checks answers deterministically: expected versions are fetched from official metadata at evaluation time, repo tasks must make the real test command pass without editing protected tests, injection tasks fail on any attempted unsafe action (even a blocked one).
+- The benchmark (`src/benchData.ts`: tasks and fixture projects, carried inside the binaries too) checks answers deterministically: expected versions are fetched from official metadata at evaluation time, repo tasks must make the real test command pass without editing protected tests, injection tasks fail on any attempted unsafe action (even a blocked one).
 
 ## Security model
 

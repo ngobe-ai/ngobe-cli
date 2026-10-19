@@ -8,10 +8,17 @@ What it does beyond a plain chat loop:
 - **Edits code safely.** Every tool call is schema-validated; writes stay inside the project; shell commands are risk-classified; destructive, privileged, secret-touching and publishing actions always ask. Files changed behind the agent's back are not overwritten.
 - **Learns from measured outcomes.** A SQLite memory keeps working commands, conventions, run outcomes, tool reliability and recurring failures. Prompt changes are benchmarked before they can be promoted, and can be rolled back. No model weights are changed.
 
-## Quick start
+## Install
 
-    git clone https://github.com/ngobe-ai/ngobe-cli && cd ngobe-cli/cli
-    npm ci && npm run build && npm link        # or: bun install && bun run dev
+    curl -fsSL https://raw.githubusercontent.com/ngobe-ai/ngobe-cli/main/install.sh | sh   # Linux, macOS
+    brew install ngobe-ai/tap/ngobe                                                     # Homebrew
+    npm install -g ngobe                                                                # Node 22.13+
+
+The install script puts a standalone binary (no Node needed) in `~/.local/bin` after checking its SHA-256; set `NGOBE_VERSION=0.3.0` for a specific version or `NGOBE_INSTALL_DIR` for another directory. Update with `ngobe update` (Homebrew: `brew upgrade ngobe`; npm: `npm install -g ngobe@latest`). Windows: use WSL.
+
+From source: `git clone https://github.com/ngobe-ai/ngobe-cli && cd ngobe-cli && bun install && bun run dev` (or `npm ci && npm run build && npm link`).
+
+## Quick start
 
     # point it at your model (Docker Model Runner shown; see docs/deployment.md)
     export NGOBE_BASE_URL=http://localhost:12434/engines/v1
@@ -38,7 +45,8 @@ What it does beyond a plain chat loop:
 | `ngobe memory [list\|show\|export\|delete\|clear\|disable\|enable]` | Inspect and control learned memory |
 | `ngobe learn [variants\|add\|propose\|promote\|rollback]` | Outcomes, recurring failures, prompt variants |
 | `ngobe benchmark [--variant x] [--task id]` | Run the evaluation set against the configured model |
-| `ngobe doctor`, `ngobe config` | Diagnostics; effective configuration (secrets redacted) |
+| `ngobe doctor`, `ngobe config` | Diagnostics (including whether an update is out); effective configuration (secrets redacted) |
+| `ngobe update` | Update a standalone install in place (checksum-verified); prints the command for npm/Homebrew installs |
 
 Modes (`--mode`): `ask` and `plan` are read-only; `edit` (default) asks before writes and commands; `auto` runs low-risk writes and commands but still asks for dangerous ones. `--yolo` is now an alias for `auto`.
 
@@ -51,6 +59,7 @@ Existing `MUGAMBA_*` environment variables and the `mugamba` command keep workin
 - [docs/deployment.md](docs/deployment.md): VPS + Docker Model Runner setup, memory budget, upgrades, backups
 - [docs/troubleshooting.md](docs/troubleshooting.md): common failures and fixes
 - [docs/status.md](docs/status.md): what is implemented, verified, deferred and unsupported
+- [docs/releasing.md](docs/releasing.md): CI, the release pipeline, and the one-time setup it needs
 - [config.example.json](config.example.json): example config file (no secrets)
 
 ## Development
@@ -58,5 +67,6 @@ Existing `MUGAMBA_*` environment variables and the `mugamba` command keep workin
     bun test                          # unit and integration tests (offline)
     NGOBE_LIVE=1 bun test test/live.test.ts   # also query the real official sources
     npm run typecheck && npm run build
+    bun run build:binaries            # standalone binaries for every platform into dist-bin/
 
-Layout: `src/index.ts` (CLI), `src/agent.ts` (loop), `src/llm.ts` (model gateway), `src/permissions.ts`, `src/tools/` (one file per tool family), `src/web/` (HTTP, search, extraction), `src/releases/` (versions, notes, advisories), `src/memory/` (SQLite store), `src/learn.ts`, `src/bench.ts` + `bench/` (evaluation set), `src/doctor.ts`, `src/tui/` (chat screen).
+Layout: `src/index.ts` (CLI), `src/agent.ts` (loop), `src/llm.ts` (model gateway), `src/permissions.ts`, `src/tools/` (one file per tool family), `src/web/` (HTTP, search, extraction), `src/releases/` (versions, notes, advisories), `src/memory/` (SQLite store), `src/learn.ts`, `src/bench.ts` + `src/benchData.ts` (evaluation set), `src/doctor.ts`, `src/tui/` (chat screen).
