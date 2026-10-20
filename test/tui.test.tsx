@@ -101,3 +101,40 @@ test("ctrl+v pastes a screenshot from the clipboard as a file path in the prompt
   expect(asked).toBe(1);
   expect(stdout.last).toContain("rebuild this UI /tmp/state/clipboard/shot-1.png");
 });
+
+test("an edit shows like Claude Code's: line numbers, - and + rows, context", async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  const store = new Store("edit");
+  const app = render(<App store={store} config={{ model: "m", baseURL: "http://x", cwd: "/tmp/p", mode: "edit", version: "1.0.0" }} onInterrupt={() => false} />, {
+    stdout: stdout as never,
+    stdin: stdin as never,
+    debug: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  unmounts.push(() => app.unmount());
+  store.toolUpdate({
+    id: "1",
+    label: "Update",
+    target: "src/memory/db.ts",
+    state: "ok",
+    summary: "Updated src/memory/db.ts (+2 −1)",
+    preview: [
+      { text: "  try {", tone: "context", line: 44, lang: "ts" },
+      { text: "    raw = new DatabaseSync(file, undefined);", tone: "remove", line: 45, lang: "ts" },
+      { text: "    // pass options only when there are some", tone: "add", line: 45, lang: "ts" },
+      { text: "    raw = new DatabaseSync(file);", tone: "add", line: 46, lang: "ts" },
+      { text: "  } finally {", tone: "context", line: 47, lang: "ts" },
+    ],
+  });
+  await tick();
+  const frame = stdout.last;
+  expect(frame).toContain("Updated src/memory/db.ts (+2 −1)");
+  expect(frame).toMatch(/44 {3}  try \{/);
+  // "45 -" then the separator space and the line's own 4-space indent.
+  expect(frame).toMatch(/45 - {5}raw = new DatabaseSync\(file, undefined\);/);
+  expect(frame).toMatch(/45 \+ {5}\/\/ pass options only when there are some/);
+  expect(frame).toMatch(/46 \+ {5}raw = new DatabaseSync\(file\);/);
+  // (The red and green row backgrounds need a color terminal; this fake one has none.)
+});

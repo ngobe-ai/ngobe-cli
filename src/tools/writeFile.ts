@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Tool } from "../types.js";
 import { assertUnchanged, hashText, isGitInternal, isSecretPath, reqStr, resolveInside } from "./util.js";
+import { createdPreview, diffPreview, langOf } from "../diff.js";
 
 export const writeFile: Tool = {
   name: "write_file",
@@ -43,6 +44,14 @@ export const writeFile: Tool = {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
     ctx.files?.set(abs, hashText(content));
+    const lang = langOf(shown);
+    if (existing === null) {
+      const count = content === "" ? 0 : content.replace(/\n$/, "").split("\n").length;
+      ctx.report?.({ summary: `Created ${shown} (${count} line${count === 1 ? "" : "s"})`, preview: createdPreview(content, lang) });
+    } else {
+      const d = diffPreview(existing, content, lang);
+      ctx.report?.({ summary: `Updated ${shown} (+${d.added} −${d.removed})`, preview: d.lines });
+    }
     const n = content.split("\n").length;
     return `${existing === null ? "Created" : "Updated"} ${shown} (${n} line${n === 1 ? "" : "s"}).`;
   },

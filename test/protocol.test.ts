@@ -216,6 +216,15 @@ describe("tool calls a small model writes in prose", () => {
     expect(fileHandoff("```css\nbody{}\na{}\np{}\n```", "create page.html", none)).toBeNull(); // CSS is not page.html
   });
 
+  test("<tool_request> is read like <tool_call>, and never shown", () => {
+    // Seen live: "Let's run the tests to verify.\n\n<tool_request>" printed as text before the call ran.
+    const wrapped = 'Let\'s run the tests.\n\n<tool_request>\n{"name": "bash", "arguments": {"command": "npm test"}}\n</tool_request>';
+    expect(parseTextToolCalls(wrapped, known)).toEqual({ content: "Let's run the tests.", calls: [{ name: "bash", arguments: '{"command":"npm test"}' }] });
+    const open = 'Let\'s run the tests.\n\n<tool_request>\n{"name": "bash", "arguments": {"command": "npm test"}}';
+    expect(parseTextToolCalls(open, known).content).toBe("Let's run the tests.");
+    expect(visibleLength("Checking.\n<tool_req", false)).toBe(10);
+  });
+
   test("a JSON object under a label that isn't a tool stays text", () => {
     const json = 'The payload:\n```json\n{"command": "ls"}\n```';
     expect(parseTextToolCalls(json, known)).toEqual({ content: json, calls: [] });

@@ -25,7 +25,8 @@ export interface TextToolCall {
   arguments: string;
 }
 
-const BLOCK = /<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/g;
+// <tool_request> is what some Qwen replies write instead of <tool_call>.
+const BLOCK = /<(?:tool_call|tool_request)>([\s\S]*?)(?:<\/(?:tool_call|tool_request)>|$)/g;
 
 /**
  * Extract tool calls written as text: the JSON form used by Hermes/Qwen 2.5 templates
@@ -82,8 +83,9 @@ function parseLoose(text: string, known: string[]): { content: string; calls: Te
     seen.add(brace); // a fenced call is found from both the fence and its own line
     consider(brace, m.index);
   }
-  // Whatever follows the first call (often made-up results) is not part of the reply.
-  if (calls.length) return { content: text.slice(0, first).trim(), calls };
+  // Whatever follows the first call (often made-up results) is not part of the reply, nor is a
+  // wrapper tag left open right before it.
+  if (calls.length) return { content: text.slice(0, first).replace(/<\/?(?:tool_request|tool_call|tools?|function)>\s*$/, "").trim(), calls };
   const handoff = known.includes("bash") ? shellHandoff(text) : null;
   if (handoff) return { content: handoff.before, calls: [{ name: "bash", arguments: JSON.stringify({ command: handoff.command }) }] };
   const said = known.includes("bash") ? proseCommand(text, known) : null;
@@ -242,7 +244,7 @@ export function toTextMessages(messages: Message[]): Message[] {
   return out;
 }
 
-const TAGS = ["<tool_call", "<function"];
+const TAGS = ["<tool_call", "<tool_request", "<function"];
 
 /**
  * How much of streamed text is safe to show: everything before a <tool_call> or <function>

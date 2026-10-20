@@ -12,6 +12,7 @@ import {gradientAt} from "./logo.js";
 import {renderMarkdown} from "../markdown.js";
 import type {SlashCommand} from "../slash.js";
 import type {EntryKind, NoteTone, Store} from "./store.js";
+import {highlight} from "../diff.js";
 
 /** SGR mouse reports (enabled in tui.tsx): button 64 is the wheel turned up, 65 down. */
 // eslint-disable-next-line no-control-regex
@@ -246,7 +247,10 @@ function Welcome() {
 
 const NOTE_COLOR: Record<NoteTone, string> = {info: "gray", warn: "yellow", error: "red"};
 const STATE_COLOR: Record<ToolView["state"], string> = {running: "gray", ok: "green", error: "red", declined: "yellow"};
-const TONE_COLOR: Record<NonNullable<PreviewLine["tone"]>, string | undefined> = {add: "green", remove: "red", dim: undefined, error: "red"};
+const TONE_COLOR: Record<NonNullable<PreviewLine["tone"]>, string | undefined> = {add: "green", remove: "red", context: undefined, dim: undefined, error: "red"};
+// Diff rows, as in Claude Code: removed lines on red, added on green, across the row.
+const DIFF_BG = {add: "#12361d", remove: "#3d1418"} as const;
+const DIFF_LINES = 30;
 
 const EntryView = memo(
   function EntryView({kind, text, tone, view}: {kind: EntryKind; text: string; tone?: NoteTone; view?: Readonly<ToolView>}) {
@@ -324,15 +328,51 @@ function ToolRow({view}: {view: Readonly<ToolView>}) {
           </Text>
         </Text>
       ) : null}
-      {!running &&
+      {!running && isDiff(preview) ? (
+        <DiffRows lines={preview} />
+      ) : (
+        !running &&
         preview.slice(0, PREVIEW_LINES).map((p, i) => (
           <Text key={i} wrap="truncate-end" color={p.tone ? TONE_COLOR[p.tone] : undefined} dimColor={p.tone === "dim" || !p.tone}>
             {"     "}
             {p.text}
           </Text>
-        ))}
-      {!running && preview.length > PREVIEW_LINES ? <Text dimColor>{`     … +${preview.length - PREVIEW_LINES} lines`}</Text> : null}
+        ))
+      )}
+      {!running && !isDiff(preview) && preview.length > PREVIEW_LINES ? <Text dimColor>{`     … +${preview.length - PREVIEW_LINES} lines`}</Text> : null}
     </Box>
+  );
+}
+
+function isDiff(preview: PreviewLine[]): boolean {
+  return preview.some((p) => p.line !== undefined);
+}
+
+/** "  45 -  old line" on red, "  45 +  new line" on green, context plain; numbers padded alike. */
+function DiffRows({lines}: {lines: PreviewLine[]}) {
+  const shown = lines.slice(0, DIFF_LINES);
+  const width = Math.max(...shown.map((p) => String(p.line ?? "").length));
+  return (
+    <>
+      {shown.map((p, i) =>
+        p.line === undefined ? (
+          <Text key={i} dimColor>{`     ${" ".repeat(width)}   ${p.text}`}</Text>
+        ) : (
+          <Box key={i} marginLeft={5} backgroundColor={p.tone === "add" || p.tone === "remove" ? DIFF_BG[p.tone] : undefined}>
+            <Text wrap="wrap">
+              <Text dimColor>{String(p.line).padStart(width)} </Text>
+              <Text color={p.tone === "add" ? "green" : p.tone === "remove" ? "red" : undefined}>{p.tone === "add" ? "+" : p.tone === "remove" ? "-" : " "} </Text>
+              {highlight(p.text, p.lang).map((s, j) => (
+                <Text key={j} color={s.color}>
+                  {s.text}
+                </Text>
+              ))}
+            </Text>
+          </Box>
+        ),
+      )}
+      {lines.length > DIFF_LINES ? <Text dimColor>{`     … +${lines.length - DIFF_LINES} lines`}</Text> : null}
+    </>
   );
 }
 

@@ -1,4 +1,6 @@
 import * as readline from "node:readline/promises";
+import chalk from "chalk";
+import { highlight } from "./diff.js";
 import { mdLine, type MdState } from "./markdown.js";
 import type { PreviewLine, Todo, ToolView } from "./types.js";
 import { bold, cyan, dim, formatDuration, formatTokens, green, red, runDoneLine, yellow, type Activity, type RunSummary, type Ui } from "./ui.js";
@@ -6,7 +8,8 @@ import { bold, cyan, dim, formatDuration, formatTokens, green, red, runDoneLine,
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 const PREVIEW_LINES = 8;
 
-const TONE: Record<NonNullable<PreviewLine["tone"]>, (s: string) => string> = { add: green, remove: red, dim, error: red };
+const TONE: Record<NonNullable<PreviewLine["tone"]>, (s: string) => string> = { add: green, remove: red, context: (s) => s, dim, error: red };
+const DIFF_LINES = 30;
 const DOT: Record<ToolView["state"], (s: string) => string> = { running: dim, ok: green, error: red, declined: yellow };
 
 /** "⏺ Read(src/a.ts)" and its "⎿ summary" / preview lines, as printed when the call finishes. */
@@ -15,9 +18,26 @@ export function toolLines(v: ToolView, width = 100): string[] {
   const lines = [head];
   if (v.summary) lines.push(`  ${dim("⎿")}  ${v.state === "error" ? red(v.summary) : v.state === "declined" ? yellow(v.summary) : dim(v.summary)}`);
   const preview = v.preview ?? [];
+  if (preview.some((p) => p.line !== undefined)) return [...lines, ...diffLines(preview, width)];
   for (const p of preview.slice(0, PREVIEW_LINES)) lines.push(`     ${p.tone ? TONE[p.tone](clip(p.text, width - 5)) : clip(p.text, width - 5)}`);
   if (preview.length > PREVIEW_LINES) lines.push(`     ${dim(`… +${preview.length - PREVIEW_LINES} lines`)}`);
   return lines;
+}
+
+/** Diff rows like Claude Code's: numbered, "-" on red and "+" on green across the row, code colored. */
+function diffLines(preview: PreviewLine[], width: number): string[] {
+  const shown = preview.slice(0, DIFF_LINES);
+  const w = Math.max(...shown.map((p) => String(p.line ?? "").length));
+  const out = shown.map((p) => {
+    if (p.line === undefined) return `     ${" ".repeat(w)}   ${dim(p.text)}`;
+    const mark = p.tone === "add" ? green("+") : p.tone === "remove" ? red("-") : " ";
+    const code = clip(p.text, width - w - 9);
+    const row = `${dim(String(p.line).padStart(w))} ${mark} ${highlight(code, p.lang).map((s) => (s.color ? chalk.hex(s.color.startsWith("#") ? s.color : "#7f849c")(s.text) : s.text)).join("")}`;
+    const pad = " ".repeat(Math.max(0, width - 5 - (w + 3 + code.length)));
+    return `     ${p.tone === "add" ? chalk.bgHex("#12361d")(row + pad) : p.tone === "remove" ? chalk.bgHex("#3d1418")(row + pad) : row}`;
+  });
+  if (preview.length > DIFF_LINES) out.push(`     ${dim(`… +${preview.length - DIFF_LINES} lines`)}`);
+  return out;
 }
 
 /** "✻ Running tests… (34s · 2.8k tokens · ctrl+c to interrupt)" */

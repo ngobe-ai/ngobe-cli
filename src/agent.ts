@@ -12,7 +12,6 @@ import { briefDescription } from "./tools/overview.js";
 import { KNOWN_NAMES } from "./releases/versions.js";
 import { fromImage, uiHint, wantsUi } from "./design.js";
 import { fileHandoff } from "./toolProtocol.js";
-import { redact } from "./log.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
 import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
@@ -155,21 +154,34 @@ export function namedFiles(input: string, cwd: string): string[] {
   return found;
 }
 
-// "Add / build / integrate …" with a framework, library or service in it: worth checking current docs first.
+// Worth a lookup before the first turn: wiring in an external service or API (their setup and APIs
+// change), or moving to a new version or setting a tool up. Not ordinary building with a framework
+// the model knows ("add a settings page to the Flutter app"): there, a search only costs time.
 const BUILD = /\b(?:build|create|implement|add|integrate|set ?up|scaffold|develop|migrate|upgrade|install|connect|configure|use)\b/i;
+const SETUP = /\b(?:upgrade|update|migrate|install|set ?up|setup|configure)\b/i;
+const UPGRADE = /\b(?:upgrade|update|migrate)\b/i;
 const SERVICE =
-  /\b(?:api|sdk|oauth|webhooks?|payments?|stripe|paypal|firebase|supabase|aws|s3|openai|graphql|websockets?|redis|mongodb|mysql|auth0|clerk|twilio|sendgrid|mapbox|google (?:sign[- ]?in|maps|login))\b/i;
+  /\b(?:api|sdk|oauth|webhooks?|payments?|stripe|paypal|firebase|supabase|aws|s3|openai|graphql|websockets?|redis|mongodb|mysql|auth0|clerk|twilio|sendgrid|mapbox|google (?:sign[- ]?in|maps|login))\b/gi;
 // Known names that are also everyday words ("add a next button", "go ahead").
 const AMBIGUOUS = new Set(["next", "go", "express", "node", "npm", "pnpm"]);
 
-/** For a build request naming a technology: its latest version (at most two) and a docs search, if offered. */
+/**
+ * The lookups a request is worth: the latest version of a named technology when it is being
+ * upgraded or set up, and a docs search for a service integration or an upgrade. The query holds
+ * only technology names and the kind of task, never the request's words (client names, plans).
+ */
 export function researchCalls(input: string, offered: Map<string, Tool>): [string, Args][] {
-  if (!BUILD.test(input)) return [];
-  const named = KNOWN_NAMES.filter((n) => !AMBIGUOUS.has(n) && new RegExp(String.raw`(?<![\w.-])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\w-])`, "i").test(input));
-  if (!named.length && !SERVICE.test(input)) return [];
+  if (!BUILD.test(input) && !SETUP.test(input)) return [];
+  const named = KNOWN_NAMES.filter((n) => !AMBIGUOUS.has(n) && new RegExp(String.raw`(?<![\w.-])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\w-])`, "i").test(input)).slice(0, 2);
+  const services = [...new Set([...input.matchAll(SERVICE)].map((m) => m[0].toLowerCase().replace(/\s+/g, " ")))].slice(0, 3);
+  const setup = SETUP.test(input) && named.length > 0;
+  if (!services.length && !setup) return [];
   const calls: [string, Args][] = [];
-  if (offered.has("check_latest_version")) for (const name of named.slice(0, 2)) calls.push(["check_latest_version", { name }]);
-  if (offered.has("web_search")) calls.push(["web_search", { query: `${redact(input.replace(/\s+/g, " ").trim()).slice(0, 150)} documentation` }]);
+  if (setup && offered.has("check_latest_version")) for (const name of named) calls.push(["check_latest_version", { name }]);
+  if (offered.has("web_search")) {
+    const topic = setup && UPGRADE.test(input) ? "upgrade guide" : services.length ? "documentation" : "setup documentation";
+    calls.push(["web_search", { query: `${[...named, ...services].join(" ")} ${topic}` }]);
+  }
   return calls;
 }
 
@@ -704,6 +716,8 @@ export class Agent {
     const view = viewOf(p);
     let output: string;
     let failure: ToolFailure | null = p.failure ?? null;
+    /** What the tool said about itself for the transcript (an edit's real diff). */
+    let reported: { summary: string; preview?: PreviewLine[] } | undefined;
 
     if (!failure) {
       const tool = p.tool!;
@@ -719,7 +733,7 @@ export class Agent {
       try {
         // Tool results are re-read on every later turn: keep them within a share of the context budget.
         const limit = Math.min(20_000, Math.max(2_000, Math.floor(config.maxContextChars / 5)));
-        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, this.context(s)), signal), limit);
+        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, { ...this.context(s), report: (v) => (reported = v) }), signal), limit);
       } catch (err) {
         failure = err instanceof ToolFailure ? err : new ToolFailure(signal.aborted ? "cancelled" : "failed", err instanceof Error ? err.message : String(err));
         // Error text goes back to the model so it can correct itself.
@@ -750,7 +764,7 @@ export class Agent {
     try {
       shown = failure
         ? { summary: failure.kind === "denied" ? "Declined" : failure.message.split("\n")[0].slice(0, 160) }
-        : (p.tool?.summarize?.(p.args ?? {}, output, ms) ?? defaultSummary(output));
+        : (reported ?? p.tool?.summarize?.(p.args ?? {}, output, ms) ?? defaultSummary(output));
     } catch {
       shown = defaultSummary(output);
     }

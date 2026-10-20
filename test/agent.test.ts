@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { Agent, announcesAction } from "../src/agent.js";
+import { Agent, announcesAction, researchCalls } from "../src/agent.js";
 import type { Config } from "../src/config.js";
 import { trimHistory } from "../src/context.js";
 import { LLM } from "../src/llm.js";
@@ -434,12 +434,27 @@ describe("agent loop", () => {
     const search = counter("web_search", "network");
     search.tool.parameters = { type: "object", properties: { query: { type: "string" } }, required: ["query"] };
     const { agent, model } = setup([{ content: "Here is the plan." }], [latest.tool, search.tool]);
-    await agent.run("add Google sign-in with Firebase to the Flutter app", new AbortController().signal);
-    expect(latest.calls).toEqual([{ name: "flutter" }]);
-    expect(search.calls).toHaveLength(1);
-    expect(String(search.calls[0].query)).toContain("Google sign-in with Firebase");
+    await agent.run("add Google sign-in with Firebase to the Flutter app for Acme Corp's payroll", new AbortController().signal);
+    // An external service: its docs are searched, with technology names only (nothing private).
+    expect(search.calls).toEqual([{ query: "flutter google sign-in firebase documentation" }]);
+    expect(latest.calls).toEqual([]); // not an upgrade or a setup: the version doesn't matter here
     const first = model.requests[0].messages as Message[];
-    expect(first.filter((m) => m.role === "tool").map((m) => m.content)).toEqual(["check_latest_version ok", "web_search ok"]);
+    expect(first.filter((m) => m.role === "tool").map((m) => m.content)).toEqual(["web_search ok"]);
+  });
+
+  test("upgrades and setups check the version and search the guide; ordinary building looks nothing up", () => {
+    const offered = new Map<string, Tool>([["check_latest_version", {} as Tool], ["web_search", {} as Tool]]);
+    expect(researchCalls("upgrade the app to Next.js 15", offered)).toEqual([
+      ["check_latest_version", { name: "next.js" }],
+      ["web_search", { query: "next.js upgrade guide" }],
+    ]);
+    expect(researchCalls("set up tailwind in the marketing site", offered)).toEqual([
+      ["check_latest_version", { name: "tailwind" }],
+      ["web_search", { query: "tailwind setup documentation" }],
+    ]);
+    for (const r of ["add a settings page to the Flutter app", "create a React component for the cart", "build a login screen in Flutter", "use laravel validation in the form"]) {
+      expect(researchCalls(r, offered)).toEqual([]);
+    }
   });
 
   test("fixes, questions and everyday words don't trigger a lookup", async () => {

@@ -20,7 +20,12 @@ export interface Todo {
 /** A line under a tool call in the transcript: diff lines, the end of command output, a todo list. */
 export interface PreviewLine {
   text: string;
-  tone?: "add" | "remove" | "dim" | "error";
+  /** add/remove/context are diff lines (shown with line numbers and colored rows). */
+  tone?: "add" | "remove" | "context" | "dim" | "error";
+  /** Line number in the file, for diff lines. */
+  line?: number;
+  /** Language for syntax colors ("ts", "py", …). */
+  lang?: string;
 }
 
 /** How a tool call appears in the transcript. */
@@ -40,6 +45,8 @@ export interface ToolContext {
   cwd: string;
   /** The user's current request (an image read for "reproduce this UI" gets a blueprint). */
   request?: string;
+  /** How the call should show in the transcript, from the tool itself (an edit's real diff). */
+  report?(view: { summary: string; preview?: PreviewLine[] }): void;
   signal?: AbortSignal;
   /** Present when running inside the agent; tools fall back to defaults without it. */
   config?: Config;
