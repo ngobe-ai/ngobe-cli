@@ -3,7 +3,7 @@ import { Agent } from "./agent.js";
 import path from "node:path";
 import { loadAgents, type AgentDef } from "./agents.js";
 import { configFilePath, type Config, type Mode } from "./config.js";
-import { buildSessionContext, buildSystemPrompt, loadProjectInstructions } from "./context.js";
+import { buildSessionContext, buildSystemPrompt, loadProjectInstructions, topLevelEntries } from "./context.js";
 import { LLM } from "./llm.js";
 import { AuditLog } from "./log.js";
 import { Memory } from "./memory/store.js";
@@ -12,6 +12,7 @@ import { detectProject, type ProjectInfo } from "./project.js";
 import { buildTools } from "./tools/index.js";
 import type { Tool } from "./types.js";
 import type { Ui } from "./ui.js";
+import { ProjectMemory } from "./projectMemory.js";
 
 export interface Session {
   agent: Agent;
@@ -24,6 +25,8 @@ export interface Session {
   variant: string;
   agents: AgentDef[];
   perms: Permissions;
+  /** NGOBE.md and the record of the latest work per project (null when memory is off). */
+  projectMemory: ProjectMemory | null;
 }
 
 export interface SessionOptions {
@@ -42,12 +45,12 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
 
   const agents = loadAgents(config.cwd, path.dirname(configFilePath()));
   const tools = buildTools(config, { memory: !!memory?.enabled, agents });
-  const [project, instructions] = await Promise.all([detectProject(config.cwd), loadProjectInstructions(config.cwd)]);
+  const [project, instructions, topLevel] = await Promise.all([detectProject(config.cwd), loadProjectInstructions(config.cwd), topLevelEntries(config.cwd)]);
 
   let notes: string[] = [];
   let failures: string[] = [];
   if (memory?.enabled) {
-    const facts = memory.recall(config.cwd, 12, ["lesson", "command", "convention", "version", "note"]);
+    const facts = memory.recall(config.cwd, 12, ["command", "convention", "version", "note"]); // lessons are in NGOBE.md
     memory.markUsed(facts.map((f) => f.id));
     notes = facts.map((f) => `${f.kind} ${f.key}: ${f.value} (${f.source}, confidence ${f.confidence.toFixed(1)}, ${f.updated_at.slice(0, 10)})`);
     failures = memory
@@ -63,7 +66,15 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
   // The system prompt is the same in every folder and mode, so the server keeps it (and the tools)
   // cached across sessions; what is particular to this one goes in the session context after them.
   const systemPrompt = buildSystemPrompt({ tools, workingInstructions: variant.prompt || undefined });
-  const sessionContext = (mode: Mode) => buildSessionContext({ cwd: config.cwd, mode, instructions, project, notes, failures });
+  // Benchmarks and tests pass memory: null, and must not write to the user's NGOBE.md either.
+  const projectMemory = config.memory && opts.memory !== null ? new ProjectMemory(config.memoryFile, config.stateDir) : null;
+  let remembered = "";
+  try {
+    remembered = projectMemory?.contextFor(config.cwd) ?? "";
+  } catch (err) {
+    ui.warn(`Could not read ${config.memoryFile}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const sessionContext = (mode: Mode) => buildSessionContext({ cwd: config.cwd, mode, instructions, project, notes, failures, topLevel, memory: remembered });
   log.event("session", { mode: config.mode, model: config.model, tools: tools.length, prompt_chars: systemPrompt.length, context_chars: sessionContext(config.mode).length, variant: variant.name });
 
   const perms = new Permissions(ui, config.mode);
@@ -75,11 +86,12 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
     perms,
     systemPrompt,
     sessionContext,
+    projectMemory,
     memory,
     log,
     command: opts.command,
     testCommand: project.commands.test,
     variant: variant.name,
   });
-  return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms };
+  return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms, projectMemory };
 }

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { assetName, installMethod } from "../src/update.js";
+import { loadConfig } from "../src/config.js";
+import { assetName, dueForUpdateCheck, installMethod, markUpdateChecked, upgradeCommand } from "../src/update.js";
+import { tmpDir } from "./helpers.js";
 
 describe("release asset for a machine", () => {
   test.each([
@@ -28,5 +30,29 @@ describe("install method", () => {
   test("the npm package, or a source checkout", () => {
     expect(installMethod({ standalone: false, script: "/usr/lib/node_modules/@ngobe-ai/ngobe/dist/index.js" })).toBe("npm");
     expect(installMethod({ standalone: false, script: "/opt/ngobe-cli/dist/index.js" })).toBe("source");
+  });
+});
+
+describe("ngobe upgrade", () => {
+  test("updates itself however it was installed: Homebrew and npm run their own upgrade", () => {
+    expect(upgradeCommand("homebrew")).toEqual(["brew", ["upgrade", "ngobe-ai/tap/ngobe"]]);
+    expect(upgradeCommand("npm")).toEqual(["npm", ["install", "-g", "@ngobe-ai/ngobe@latest"]]);
+    expect(upgradeCommand("binary")).toBeNull(); // downloads and swaps the binary itself
+    expect(upgradeCommand("source")).toBeNull(); // a checkout is the user's to pull
+  });
+
+  test("upgrade is a command, and update still works", () => {
+    const env = { HOME: tmpDir(), XDG_CONFIG_HOME: tmpDir() };
+    expect(loadConfig(["upgrade"], env).command).toBe("upgrade");
+    expect(loadConfig(["update"], env).command).toBe("update");
+  });
+
+  test("the chat checks for a new release at most once a day", () => {
+    const dir = tmpDir();
+    const now = Date.parse("2026-10-20T10:00:00Z");
+    expect(dueForUpdateCheck(dir, now)).toBe(true);
+    markUpdateChecked(dir, now);
+    expect(dueForUpdateCheck(dir, now + 3_600_000)).toBe(false);
+    expect(dueForUpdateCheck(dir, now + 25 * 3_600_000)).toBe(true);
   });
 });

@@ -53,10 +53,12 @@
     "fast-glob": "^3.3.3",
     "ink": "^8.0.0",
     "openai": "^7.39.0",
+    "picomatch": "^2.3.1",
     "react": "^19.3.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@types/picomatch": "^2.3.4",
     "@types/react": "^19.3.0",
     "typescript": "^7.0.2"
   }

@@ -34,6 +34,7 @@ export async function runCommand(loaded: LoadedConfig): Promise<number> {
       case "config":
         return cmdConfig(loaded);
       case "update":
+      case "upgrade":
         return await (await import("./update.js")).cmdUpdate(loaded);
       default:
         console.error(`unknown command ${loaded.command}`);

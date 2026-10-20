@@ -1,9 +1,10 @@
-import { spawn, spawnSync } from "node:child_process";
-import { childEnv } from "../childEnv.js";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { childEnv } from "../childEnv.js";
 import type { Args, Tool, ToolContext } from "../types.js";
 import { optInt, reqStr, isSecretPath, resolveInside } from "./util.js";
+import { hasRipgrep } from "./files.js";
 import { assertPatternInside, findFiles } from "./glob.js";
 
 const MAX_LINES = 150;
@@ -110,12 +111,6 @@ function query(args: Args, ctx: ToolContext): Query {
   // Default result size follows the context budget: every line is re-read on each later turn.
   const budget = ctx.config ? Math.min(MAX_LINES, Math.max(30, Math.floor(ctx.config.maxContextChars / 400))) : MAX_LINES;
   return { re, pattern, mode, dir, glob, type, ignoreCase, context: optInt(args, "context") ?? 0, limit: optInt(args, "head_limit") ?? budget };
-}
-
-let rgAvailable: boolean | undefined;
-function hasRipgrep(): boolean {
-  rgAvailable ??= spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0;
-  return rgAvailable;
 }
 
 /** ripgrep, or null when it can't handle the pattern (its regex dialect lacks lookaround and backreferences). */

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -42,7 +42,36 @@ function hasAvx2(): boolean {
   }
 }
 
-/** `ngobe update`: to the latest release, or to NGOBE_VERSION (which may also be older). */
+/** How a Homebrew or npm install upgrades itself; null when ngobe does it (binary) or the user does (source). */
+export function upgradeCommand(method: InstallMethod): [string, string[]] | null {
+  if (method === "homebrew") return ["brew", ["upgrade", "ngobe-ai/tap/ngobe"]];
+  if (method === "npm") return ["npm", ["install", "-g", "@ngobe-ai/ngobe@latest"]];
+  return null;
+}
+
+const CHECK_FILE = "update-check.json";
+const CHECK_EVERY_MS = 24 * 3_600_000;
+
+/** The chat looks for a new release at most once a day. */
+export function dueForUpdateCheck(stateDir: string, now = Date.now()): boolean {
+  try {
+    const { at } = JSON.parse(fs.readFileSync(path.join(stateDir, CHECK_FILE), "utf8")) as { at?: number };
+    return !(typeof at === "number" && now - at < CHECK_EVERY_MS);
+  } catch {
+    return true;
+  }
+}
+
+export function markUpdateChecked(stateDir: string, now = Date.now()): void {
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, CHECK_FILE), JSON.stringify({ at: now }));
+  } catch {
+    // a read-only state directory only means checking again next time
+  }
+}
+
+/** `ngobe upgrade` (or update): to the latest release, or to NGOBE_VERSION (which may also be older). */
 export async function cmdUpdate(loaded: LoadedConfig): Promise<number> {
   const pinned = process.env.NGOBE_VERSION?.replace(/^v/, "");
   const latest = pinned || (await latestVersion(REPO, "github", { config: { ...loaded.config, cacheDir: "" } })).stable?.version;
@@ -55,11 +84,21 @@ export async function cmdUpdate(loaded: LoadedConfig): Promise<number> {
   console.log(`${bold(`ngobe ${VERSION} → ${latest}`)} ${dim(`(installed via ${method})`)}`);
   switch (method) {
     case "npm":
-      console.log("Update with: npm install -g @ngobe-ai/ngobe@latest");
+    case "homebrew": {
+      if (pinned) {
+        console.log(yellow(`NGOBE_VERSION only applies to the standalone binary; ${method} installs the latest release.`));
+      }
+      const [cmd, args] = upgradeCommand(method)!;
+      console.log(dim(`$ ${cmd} ${args.join(" ")}`));
+      const code = await runInteractive(cmd, args);
+      if (code !== 0) {
+        console.log(yellow(`${cmd} exited with ${code}. Try it yourself: ${cmd} ${args.join(" ")}`));
+        return code;
+      }
+      const now = (await run("ngobe", ["--version"]).catch(() => "")).trim();
+      console.log(now === latest ? green(`ngobe is now ${latest}.`) : yellow(`done; \`ngobe --version\` says ${now || "nothing"} (open a new terminal if it still shows ${VERSION})`));
       return 0;
-    case "homebrew":
-      console.log("Update with: brew upgrade ngobe");
-      return 0;
+    }
     case "source":
       console.log("Update with: git pull && bun install && bun run build");
       return 0;
@@ -112,6 +151,15 @@ async function download(url: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/** brew and npm show their own progress and may ask for a password. */
+function runInteractive(cmd: string, args: string[]): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: "inherit" });
+    child.on("error", () => resolve(127));
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+}
+
 function run(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) =>
     execFile(cmd, args, { timeout: 60_000 }, (err, stdout, stderr) => (err ? reject(new Error(`${cmd} failed: ${stderr || err.message}`)) : resolve(stdout))),
@@ -123,7 +171,7 @@ export async function updateNotice(loaded: LoadedConfig): Promise<string | null>
   const info = await latestVersion(REPO, "github", { config: loaded.config });
   const latest = info.stable?.version;
   if (!latest || compareVersions(VERSION, latest) >= 0) return null;
-  const how = { binary: "ngobe update", homebrew: "brew upgrade ngobe", npm: "npm install -g @ngobe-ai/ngobe@latest", source: "git pull && bun install && bun run build" }[installMethod()];
+  const how = installMethod() === "source" ? "git pull && bun install && bun run build" : "ngobe upgrade";
   return `ngobe ${latest} is available (you have ${VERSION}); update with: ${how}`;
 }
 

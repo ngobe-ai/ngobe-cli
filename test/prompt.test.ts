@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { Memory } from "../src/memory/store.js";
+import { ProjectMemory } from "../src/projectMemory.js";
 import { createSession } from "../src/session.js";
 import type { Message } from "../src/types.js";
 import { fakeModel, recordingUi, testConfig, tmpDir } from "./helpers.js";
@@ -39,14 +40,33 @@ test("the system prompt and tools are the same in every folder and mode", async 
   expect(mb[1].content).toContain("mode: auto");
 });
 
-test("lessons from earlier runs are in the session context of every project", async () => {
+test("NGOBE.md (lessons, the user, projects) is in the session context of every project", async () => {
   const model = fakeModel([{ content: "a" }]);
   stops.push(model.stop);
   const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), memory: true });
+  config.memoryFile = path.join(tmpDir(), "NGOBE.md");
+  const notes = new ProjectMemory(config.memoryFile, config.stateDir);
+  notes.lesson("check_latest_version", 'failed with {"ecosystem":"github"}; worked with {"name":"flutter"}');
+  notes.noteAboutUser("I prefer pnpm over npm");
   const memory = Memory.open(config);
-  memory.remember({ project: "*", kind: "lesson", key: "check_latest_version", value: 'failed with {"ecosystem":"github"}; worked with {"name":"flutter"}', source: "observed" });
   const session = await createSession(config, recordingUi().ui, { command: "prompt", memory });
   await session.agent.run("hi", new AbortController().signal);
-  expect((model.requests[0].messages as Message[])[1].content).toContain('lesson check_latest_version: failed with {"ecosystem":"github"}');
+  const context = (model.requests[0].messages as Message[])[1].content as string;
+  expect(context).toContain('check_latest_version: failed with {"ecosystem":"github"}');
+  expect(context).toContain("I prefer pnpm over npm");
   memory.close();
+});
+
+test("the session context lists the folder's top level", async () => {
+  const model = fakeModel([{ content: "a" }]);
+  stops.push(model.stop);
+  const cwd = tmpDir();
+  for (const d of ["hype", "agribz", "node_modules"]) fs.mkdirSync(path.join(cwd, d));
+  fs.writeFileSync(path.join(cwd, "notes.md"), "");
+  const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd });
+  const session = await createSession(config, recordingUi().ui, { command: "prompt", memory: null });
+  await session.agent.run("hi", new AbortController().signal);
+  const context = (model.requests[0].messages as Message[])[1].content as string;
+  expect(context).toContain("Top level: agribz/, hype/, notes.md");
+  expect(context).not.toContain("node_modules");
 });

@@ -416,6 +416,51 @@ describe("agent loop", () => {
     expect(result.content).toContain("Mode is now edit");
   });
 
+  test("asked to understand a project, the overview runs before the model's first turn", async () => {
+    const { tool, calls } = counter("project_overview");
+    tool.parameters = { type: "object", properties: { path: { type: "string" } } };
+    const { agent, model, config } = setup([{ content: "Hype is a Flutter music app." }], [tool]);
+    fs.mkdirSync(path.join(config.cwd, "hype"));
+    await agent.run("analyse and understand the hype project in ~/me/COTE", new AbortController().signal);
+    expect(calls).toEqual([{ path: "hype" }]);
+    const first = model.requests[0].messages as Message[];
+    expect(first.at(-1)).toMatchObject({ role: "tool", content: "project_overview ok" });
+    expect(first.at(-2)?.role).toBe("assistant");
+  });
+
+  test("asked to build with a framework or service, the current version and docs are looked up first", async () => {
+    const latest = counter("check_latest_version", "network");
+    latest.tool.parameters = { type: "object", properties: { name: { type: "string" } }, required: ["name"] };
+    const search = counter("web_search", "network");
+    search.tool.parameters = { type: "object", properties: { query: { type: "string" } }, required: ["query"] };
+    const { agent, model } = setup([{ content: "Here is the plan." }], [latest.tool, search.tool]);
+    await agent.run("add Google sign-in with Firebase to the Flutter app", new AbortController().signal);
+    expect(latest.calls).toEqual([{ name: "flutter" }]);
+    expect(search.calls).toHaveLength(1);
+    expect(String(search.calls[0].query)).toContain("Google sign-in with Firebase");
+    const first = model.requests[0].messages as Message[];
+    expect(first.filter((m) => m.role === "tool").map((m) => m.content)).toEqual(["check_latest_version ok", "web_search ok"]);
+  });
+
+  test("fixes, questions and everyday words don't trigger a lookup", async () => {
+    const latest = counter("check_latest_version", "network");
+    const search = counter("web_search", "network");
+    const { agent } = setup([{ content: "ok" }], [latest.tool, search.tool]);
+    for (const request of ["fix the crash in main.dart", "what does this function do?", "add a next button to the form", "go ahead and create the file"]) {
+      await agent.run(request, new AbortController().signal);
+    }
+    expect(latest.calls).toEqual([]);
+    expect(search.calls).toEqual([]);
+  });
+
+  test("other requests don't get an overview", async () => {
+    const { tool, calls } = counter("project_overview");
+    const { agent } = setup([{ content: "done" }, { content: "done" }], [tool]);
+    await agent.run("fix the off-by-one in src/sum.js", new AbortController().signal);
+    await agent.run("explain this error: TypeError x is undefined", new AbortController().signal);
+    expect(calls).toEqual([]);
+  });
+
   test("records outcomes, failures and a working test command in memory", async () => {
     const { tool } = counter("bash", "exec", async () => "exit code 0\n2 passed\n");
     const { agent, memory, config } = setup([{ toolCalls: [{ name: "bash", arguments: '{"command": "npm test"}' }] }, { content: "tests pass" }], [tool], { memory: true });

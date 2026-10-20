@@ -212,7 +212,8 @@ export const searchSecurityAdvisories: Tool = {
 function formatSearch(r: SearchResponse, ctx: ToolContext): string {
   for (const res of r.results) ctx.searchResults?.add(res.url);
   const list = r.results.map(
-    (x, i) => `${i + 1}. ${x.title}${x.official ? " [official]" : ""}\n   ${x.url}\n   ${x.snippet}${x.published ? ` (${x.published})` : ""}`,
+    // Short snippets: every token is read again on each later turn, slowly on a CPU.
+    (x, i) => `${i + 1}. ${x.title}${x.official ? " [official]" : ""}\n   ${x.url}\n   ${x.snippet.length > 220 ? `${x.snippet.slice(0, 220).replace(/\s+\S*$/, "")} …` : x.snippet}${x.published ? ` (${x.published})` : ""}`,
   );
   const failed = r.failures.length ? `\n(${r.failures.join("; ")})` : "";
   return `${UNTRUSTED}\nResults from ${r.provider} for "${r.query}" (searched ${r.fetchedAt}):${failed}\n${list.join("\n")}`;
@@ -230,7 +231,7 @@ export const webSearchTool: Tool = {
     type: "object",
     properties: {
       query: { type: "string" },
-      count: { type: "integer", minimum: 1, maximum: 20, description: "Default 8" },
+      count: { type: "integer", minimum: 1, maximum: 20, description: "Default 5" },
     },
     required: ["query"],
   },
@@ -239,7 +240,7 @@ export const webSearchTool: Tool = {
   describe: (a) => `web search: ${a.query}`,
   async run(args, ctx) {
     if (!ctx.config) throw new Error("web_search needs the agent configuration");
-    const count = typeof args.count === "number" ? args.count : undefined;
+    const count = typeof args.count === "number" ? args.count : 5;
     return formatSearch(await webSearch(ctx.config, reqStr(args, "query"), { count, signal: ctx.signal }), ctx);
   },
 };

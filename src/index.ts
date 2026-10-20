@@ -65,6 +65,15 @@ async function runAgent(loaded: LoadedConfig) {
   const session = await createSession(config, ui, { command: loaded.command ?? (prompt ? "prompt" : "repl") });
   const { agent, memory } = session;
   ui.onModeCycle?.(() => agent.setMode(MODES[(MODES.indexOf(agent.currentMode) + 1) % MODES.length]));
+  // Once a day, in the background: say when a newer release is out (`ngobe upgrade` installs it).
+  if (interactive) {
+    void import("./update.js").then(async ({ dueForUpdateCheck, markUpdateChecked, updateNotice }) => {
+      if (!dueForUpdateCheck(config.stateDir)) return;
+      markUpdateChecked(config.stateDir);
+      const notice = await updateNotice(loaded).catch(() => null);
+      if (notice) ui.info(notice);
+    });
+  }
 
   let controller: AbortController | null = null;
   let lastUser = Date.now();

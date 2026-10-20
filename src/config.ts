@@ -42,6 +42,8 @@ export interface Config {
   /** HTTP response cache. */
   cacheDir: string;
   memory: boolean;
+  /** NGOBE.md: the global memory, next to config.json unless NGOBE_MEMORY_FILE says otherwise. */
+  memoryFile: string;
   /** Interactive sessions: have the server process the fixed prompt prefix before the first request. */
   warmup: boolean;
   /** Keep the model loaded and the conversation cached while the user was active this many minutes ago (0 = off). */
@@ -77,6 +79,7 @@ export const COMMANDS = [
   "doctor",
   "config",
   "update",
+  "upgrade",
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -111,7 +114,7 @@ Direct commands (no model needed):
                          run the evaluation set against the configured model
   doctor                 check model endpoint, tools, search, memory and system resources
   config                 show the effective configuration (secrets redacted)
-  update                 update to the latest release (or print how, for npm/Homebrew installs)
+  upgrade                update ngobe to the latest release (Homebrew, npm or the standalone binary; also: update)
 
 Options:
   -m, --model <name>     model name
@@ -131,7 +134,7 @@ Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
-  NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
+  NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
   BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, NGOBE_SEARXNG_KEY, GITHUB_TOKEN, NGOBE_DEBUG
 Config file: $XDG_CONFIG_HOME/ngobe/config.json (default ~/.config/ngobe/config.json).
 Secrets (API keys, tokens) are read from the environment only.`;
@@ -307,6 +310,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     stateDir,
     cacheDir,
     memory: bool(setting("MEMORY", "memory").raw, true),
+    memoryFile: envVar(env, "MEMORY_FILE") ?? path.join(path.dirname(configFilePath(env)), "NGOBE.md"),
     warmup: bool(setting("WARMUP", "warmup").raw, true),
     keepWarmMinutes: int(setting("KEEP_WARM_MINUTES", "keepWarmMinutes"), 30, 0),
     searchProviders: searchProviders(setting("SEARCH_PROVIDERS", "searchProviders"), {

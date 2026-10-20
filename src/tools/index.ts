@@ -6,6 +6,7 @@ import { editFile, multiEdit } from "./editFile.js";
 import { gitTools } from "./git.js";
 import { glob } from "./glob.js";
 import { grep } from "./grep.js";
+import { projectOverview } from "./overview.js";
 import { infoTools, webSearchTool } from "./info.js";
 import { remember } from "./memory.js";
 import { exitPlanMode, todoWrite } from "./plan.js";
@@ -19,6 +20,7 @@ export const coreTools: Tool[] = [
   editFile,
   multiEdit,
   writeFile,
+  projectOverview,
   glob,
   grep,
   bash,
@@ -39,6 +41,7 @@ const LEAN = new Set([
   "read_file",
   "edit_file",
   "write_file",
+  "project_overview",
   "glob",
   "grep",
   "bash",

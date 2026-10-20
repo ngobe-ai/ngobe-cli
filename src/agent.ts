@@ -1,9 +1,15 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { Config, Mode } from "./config.js";
 import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
+import { isResumeRequest, projectRootOf, resumeNote, userNote, type ProjectMemory, type WorkRecord } from "./projectMemory.js";
+import { briefDescription } from "./tools/overview.js";
+import { KNOWN_NAMES } from "./releases/versions.js";
+import { redact } from "./log.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
 import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
@@ -33,6 +39,8 @@ interface AgentDeps {
   variant?: string;
   /** The project's test command (from its manifests), for "let's run the tests" without a call. */
   testCommand?: string;
+  /** NGOBE.md and the record of the latest work per project (null: memory is off). */
+  projectMemory?: ProjectMemory | null;
 }
 
 export type Outcome = "completed" | "declined" | "limit" | "cancelled" | "error";
@@ -115,6 +123,27 @@ const PARALLEL = 4; // concurrent read-only tool calls
 const LOADING = "Loading the model on the server";
 const MAX_NUDGES = 2;
 const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
+// "Analyse / understand / explore … the project / app / codebase": a request to get to know it.
+const EXPLORE = /\b(?:analy[sz]e|understand|explore|overview|walk (?:me )?through|familiari[sz]e|get to know|tour of|describe|summari[sz]e)\b/i;
+const SUBJECT = /\b(?:project|repo(?:sitory)?|codebase|code base|app|application|folder|directory|monorepo|workspace|structure)\b/i;
+// "Add / build / integrate …" with a framework, library or service in it: worth checking current docs first.
+const BUILD = /\b(?:build|create|implement|add|integrate|set ?up|scaffold|develop|migrate|upgrade|install|connect|configure|use)\b/i;
+const SERVICE =
+  /\b(?:api|sdk|oauth|webhooks?|payments?|stripe|paypal|firebase|supabase|aws|s3|openai|graphql|websockets?|redis|mongodb|mysql|auth0|clerk|twilio|sendgrid|mapbox|google (?:sign[- ]?in|maps|login))\b/i;
+// Known names that are also everyday words ("add a next button", "go ahead").
+const AMBIGUOUS = new Set(["next", "go", "express", "node", "npm", "pnpm"]);
+
+/** For a build request naming a technology: its latest version (at most two) and a docs search, if offered. */
+export function researchCalls(input: string, offered: Map<string, Tool>): [string, Args][] {
+  if (!BUILD.test(input)) return [];
+  const named = KNOWN_NAMES.filter((n) => !AMBIGUOUS.has(n) && new RegExp(String.raw`(?<![\w.-])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\w-])`, "i").test(input));
+  if (!named.length && !SERVICE.test(input)) return [];
+  const calls: [string, Args][] = [];
+  if (offered.has("check_latest_version")) for (const name of named.slice(0, 2)) calls.push(["check_latest_version", { name }]);
+  if (offered.has("web_search")) calls.push(["web_search", { query: `${redact(input.replace(/\s+/g, " ").trim()).slice(0, 150)} documentation` }]);
+  return calls;
+}
+
 const RUN_TESTS = /\b(?:re-?run|run|execute)\b[^.\n]{0,25}\btests?\b/i;
 const CHANGE_NUDGE =
   "You haven't changed any file yet. Make the change yourself: read_file the file to change, then edit_file it (don't show the code to the user), then verify it.";
@@ -157,6 +186,11 @@ export class Agent {
   /** The session context, fixed when first sent (null until then), and the last mode the model was told. */
   private opening: string | null = null;
   private toldMode: Mode;
+  /** What this run has done, for NGOBE.md and "where did we stop?" (saved once a tool has run). */
+  private work: WorkRecord | null = null;
+  private workTouched = false;
+  /** The folder a project_overview looked at in this run: the project the work was about. */
+  private lookedAt: string | null = null;
   /** This run's failed calls by tool: one that later works with other arguments becomes a lesson. */
   private failedCalls = new Map<string, { args: string; error: string }>();
   private files: FileTracker = new Map();
@@ -239,6 +273,22 @@ export class Agent {
     return this.opening;
   }
 
+  /**
+   * The folder to look over when the request is about getting to know a project ("analyse and
+   * understand the hype project"): a folder of the project the request names, else the project.
+   */
+  private overviewTarget(input: string): string | null {
+    if (!EXPLORE.test(input) || !SUBJECT.test(input) || !toolsForMode(this.d.tools, this.mode).some((t) => t.name === "project_overview")) return null;
+    let dirs: string[] = [];
+    try {
+      dirs = fs.readdirSync(this.d.config.cwd, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
+    } catch {
+      return ".";
+    }
+    const words = new Set(input.toLowerCase().split(/[^\w.-]+/));
+    return dirs.filter((d) => words.has(d.toLowerCase())).sort((a, b) => b.length - a.length)[0] ?? ".";
+  }
+
   /** Tell the model about a mode change in the newest message, which hasn't been sent yet. */
   private tellMode(): void {
     this.sessionContext(); // it states the mode the session started in
@@ -310,13 +360,50 @@ export class Agent {
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
-    // The hint rides on the user message, not the system prompt: the system prompt and tool list stay
+    const pm = this.d.projectMemory;
+    const note = pm ? userNote(userInput) : null;
+    if (note) this.safely(() => pm!.noteAboutUser(note));
+    // "Where did we stop?" in a new session (after a crash or a dropped connection): the record of the
+    // last work in this folder or its project comes with the request.
+    let resumed: WorkRecord | null = null;
+    if (pm && this.messages.length === 0 && isResumeRequest(userInput)) {
+      try {
+        resumed = pm.lastWork(config.cwd);
+      } catch {
+        resumed = null;
+      }
+    }
+    const unfinished = resumed && resumed.outcome !== "completed" ? resumed : null;
+    const now = new Date().toISOString();
+    this.work = { cwd: config.cwd, request: resumed?.request ?? userInput, started: now, updated: now, outcome: "running", steps: [...(unfinished?.steps ?? [])], files: [...(unfinished?.files ?? [])] };
+    this.workTouched = false;
+    this.lookedAt = null;
+    // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
-    this.messages.push({ role: "user", content: fresh ? `${userInput}\n\n(${FRESHNESS_HINT})` : userInput });
+    const extras = [resumed ? resumeNote(resumed) : "", fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
+    this.messages.push({ role: "user", content: [userInput, ...extras].join("\n\n") });
     this.status = { label: "Thinking", since: started, tokens: 0 };
     this.running = true;
+    let runError: string | undefined;
 
     try {
+      // Calls the model would make first, made now instead of spending a model turn deciding to:
+      // "analyse the hype project" looks it over; "add Google sign-in to the Flutter app" checks the
+      // current version and docs (the model's training data is older than the libraries).
+      const byName = new Map(toolsForMode(this.d.tools, this.mode).map((t) => [t.name, t]));
+      const overview = this.overviewTarget(userInput);
+      const auto: [string, Args][] = [...(overview !== null ? [["project_overview", { path: overview }] as [string, Args]] : []), ...researchCalls(userInput, byName)];
+      if (auto.length) {
+        this.tellMode();
+        const calls: ToolCall[] = auto.map(([name, args], i) => ({ id: `call_${Date.now()}_auto${i}`, name, arguments: JSON.stringify(args) }));
+        this.messages.push({ role: "assistant", content: null, tool_calls: calls.map((c) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.arguments } })) });
+        let outputs: string[] = [];
+        try {
+          ({ outputs } = await this.runCalls(calls, byName, repeats, signal, runId, result));
+        } finally {
+          calls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
+        }
+      }
       for (;;) {
         if (stats.turns >= config.maxTurns) {
           result.outcome = "limit";
@@ -428,9 +515,11 @@ export class Agent {
       return result;
     } catch (err) {
       result.outcome = signal.aborted ? "cancelled" : "error";
-      this.d.log?.event("run_error", { run: runId, error: err instanceof Error ? err.message : String(err) });
+      runError = err instanceof Error ? err.message : String(err);
+      this.d.log?.event("run_error", { run: runId, error: runError });
       throw err;
     } finally {
+      await this.finishWork(result, runError).catch((err) => this.d.log?.event("memory_error", { error: err instanceof Error ? err.message : String(err) }));
       stats.durationMs = Date.now() - started;
       this.running = false;
       this.lastActive = Date.now();
@@ -575,6 +664,7 @@ export class Agent {
       if (failure && failure.kind !== "denied" && failure.kind !== "cancelled") memory.recordFailure(runId, config.cwd, name, failure.message);
     });
     this.safely(() => this.learnFrom(name, p, failure));
+    this.safely(() => this.recordStep(`${view.label}(${view.target})`, p, failure));
     if (!failure && name === "bash") this.safely(() => this.observeCommand(String(p.args?.command ?? ""), output, runId, result));
     // Something changed (a file write, a command): other calls may now give different results.
     if (!failure && p.key && (p.tool?.risk === "write" || p.tool?.risk === "exec")) {
@@ -606,16 +696,62 @@ export class Agent {
     }
     const before = this.failedCalls.get(name);
     this.failedCalls.delete(name);
-    if (!before || before.args === args || !this.d.memory?.enabled) return;
+    if (!before || before.args === args) return;
+    const lesson = `"${before.error}" with ${before.args.slice(0, 150)}; worked with ${args.slice(0, 150)}`;
+    this.d.projectMemory?.lesson(name, lesson);
+    if (!this.d.memory?.enabled) return;
     this.d.memory.remember({
       project: "*",
       kind: "lesson",
       key: name,
-      value: `"${before.error}" with ${before.args.slice(0, 150)}; worked with ${args.slice(0, 150)}`,
+      value: lesson,
       source: "observed",
       confidence: 0.6,
       ttlDays: 180,
     });
+  }
+
+  /** Add a finished tool call to the record of this run's work and save it (a crash loses nothing). */
+  private recordStep(step: string, p: Prepared, failure: ToolFailure | null): void {
+    const pm = this.d.projectMemory;
+    const w = this.work;
+    if (!pm || !w) return;
+    const cwd = this.d.config.cwd;
+    if (p.tool?.name === "project_overview" && !failure) this.lookedAt = path.resolve(cwd, String(p.args?.path || "."));
+    w.steps = [...w.steps, `${step} ${failure ? (failure.kind === "denied" ? "declined" : "failed") : "ok"}`].slice(-40);
+    const target = p.args?.path ?? p.args?.file_path;
+    if (!failure && p.tool?.risk === "write" && typeof target === "string") {
+      const file = path.relative(cwd, path.resolve(cwd, target));
+      if (!w.files.includes(file)) w.files = [...w.files, file].slice(-40);
+    }
+    w.updated = new Date().toISOString();
+    this.workTouched = true;
+    pm.saveWork(w, this.workDirs(w));
+  }
+
+  /** The folders the work belongs to: where ngobe runs, and each project it changed or looked at. */
+  private workDirs(w: WorkRecord): string[] {
+    const cwd = this.d.config.cwd;
+    return [cwd, ...w.files.map((f) => projectRootOf(path.resolve(cwd, f))), ...(this.lookedAt ? [projectRootOf(this.lookedAt)] : [])];
+  }
+
+  /** At the end of a run that used tools: its outcome in the record, and a line in NGOBE.md per project. */
+  private async finishWork(result: RunResult, error?: string): Promise<void> {
+    const pm = this.d.projectMemory;
+    const w = this.work;
+    this.work = null;
+    if (!pm || !w || !this.workTouched) return;
+    Object.assign(w, { outcome: result.outcome, reply: result.text.slice(0, 600) || undefined, error, updated: new Date().toISOString() });
+    pm.saveWork(w, this.workDirs(w));
+    const cwd = this.d.config.cwd;
+    const roots = w.files.length ? [...new Set(w.files.map((f) => projectRootOf(path.resolve(cwd, f))))] : [projectRootOf(this.lookedAt ?? cwd)];
+    const request = w.request.length > 100 ? `${w.request.slice(0, 100)}…` : w.request;
+    const did = w.files.length
+      ? `changed ${w.files.slice(0, 5).join(", ")}${w.files.length > 5 ? ` +${w.files.length - 5} more` : ""}`
+      : `looked into it (${result.stats.toolCalls} tool call${result.stats.toolCalls === 1 ? "" : "s"})`;
+    const tests = result.stats.tests ? `; tests ${result.stats.tests}` : "";
+    const end = { completed: "", cancelled: "; interrupted", error: "; stopped by an error", limit: "; stopped at a limit", declined: "; an action was declined" }[result.outcome];
+    for (const root of roots) pm.logWork(root, `"${request}" → ${did}${tests}${end}`, await briefDescription(root).catch(() => ""));
   }
 
   /** Learn from shell results: whether tests passed, and which test/build commands work here. */

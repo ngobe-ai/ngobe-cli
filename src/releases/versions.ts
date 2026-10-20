@@ -98,6 +98,9 @@ const KNOWN: Record<string, { ecosystem: Ecosystem; pkg?: string }> = {
   fastapi: { ecosystem: "pypi", pkg: "fastapi" },
 };
 
+/** Names check_latest_version knows without an ecosystem ("flutter", "laravel", "next.js"). */
+export const KNOWN_NAMES: readonly string[] = Object.keys(KNOWN);
+
 /** Package registries; the other ecosystems are official SDK and language release sources. */
 const REGISTRIES = new Set<Ecosystem>(["npm", "pypi", "pub", "packagist", "crates", "github"]);
 /** Where names have two parts: owner/repo, vendor/name. */

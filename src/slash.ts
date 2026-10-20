@@ -318,15 +318,18 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
 
     case "memory": {
       const memory = session.memory;
-      if (!memory?.enabled) {
+      if (!memory?.enabled || !session.projectMemory) {
         ui.info("Memory is off (NGOBE_MEMORY=0).");
         return done;
       }
+      const here = session.projectMemory.contextFor(config.cwd);
       const facts = memory.listFacts(config.cwd);
       ui.info(
-        facts.length
-          ? [`${facts.length} remembered for this project:`, ...facts.map((f) => `• ${f.kind} ${f.key}: ${f.value} (${f.source})`), "Manage with: ngobe memory list|delete|clear"].join("\n")
-          : "Nothing remembered for this project yet.",
+        [
+          `NGOBE.md: ${tildePath(config.memoryFile)} (edit it freely; ngobe keeps it up to date)`,
+          here || "Nothing in it about this folder yet.",
+          ...(facts.length ? ["", `${facts.length} learned facts for this project:`, ...facts.map((f) => `• ${f.kind} ${f.key}: ${f.value} (${f.source})`), "Manage with: ngobe memory list|delete|clear"] : []),
+        ].join("\n"),
       );
       return done;
     }
