@@ -49,6 +49,8 @@ export function parseTextToolCalls(text: string, known?: string[]): { content: s
 // Where models without a proper tool template (e.g. Qwen2.5-Coder) put a JSON call: a tag, a code
 // fence of any language (it has used ```bash), or a line of its own.
 const OPENERS = /<function>|<tools?>|```[\w-]*[ \t]*\r?\n?|(?:^|\n)[ \t]*(?=\{)/g;
+// A fence language or a line of its own just above a JSON object (matched against the text before it).
+const LABEL = /(?:```[ \t]*\r?\n?|(?:^|\n))[ \t]*([\w-]+)[ \t]*\r?\n[ \t]*$/;
 
 /**
  * JSON tool calls wrapped in <function>, <tools>, a fenced code block, or making up the whole
@@ -60,7 +62,14 @@ function parseLoose(text: string, known: string[]): { content: string; calls: Te
   let first = -1;
   const consider = (brace: number, start: number) => {
     const json = balancedObject(text, brace);
-    const call = json ? asCall(json, known) : null;
+    if (!json) return;
+    let call = asCall(json, known);
+    // Or just the arguments, under the tool's name: ```bash\n{"command": …} or read_file\n{"path": …}
+    const label = call ? null : LABEL.exec(text.slice(0, brace));
+    if (label && known.includes(label[1])) {
+      call = asArguments(json, label[1]);
+      start = label.index;
+    }
     if (!call) return;
     calls.push(call);
     if (first < 0) first = start;
@@ -129,6 +138,17 @@ function asCall(json: string, known: string[]): TextToolCall | null {
   }
 }
 
+/** A bare JSON object taken as the arguments of `name`; one shaped like a call is not. */
+function asArguments(json: string, name: string): TextToolCall | null {
+  try {
+    const p = JSON.parse(json) as unknown;
+    if (!p || typeof p !== "object" || Array.isArray(p) || "name" in p || "function" in p || "arguments" in p) return null;
+    return { name, arguments: JSON.stringify(p) };
+  } catch {
+    return null;
+  }
+}
+
 function parseBlock(body: string): TextToolCall {
   const fn = /<function=([^>\s]+)>([\s\S]*?)(?:<\/function>|$)/.exec(body);
   if (fn) {
@@ -176,15 +196,18 @@ const TAGS = ["<tool_call", "<function"];
  * How much of streamed text is safe to show: everything before a <tool_call> or <function>
  * block, holding back a trailing fragment that might be the start of one ("<to…").
  * With holdJson (models that write calls as plain JSON), also everything from a code fence or a
- * line starting with "{": the caller shows it at the end of the turn if it wasn't a call.
+ * line starting with "{", and a last one-word line that may be a tool's name above its arguments:
+ * the caller shows it at the end of the turn if it wasn't a call.
  */
 export function visibleLength(content: string, final: boolean, holdJson = false): number {
   const cuts = TAGS.map((t) => content.indexOf(t)).filter((i) => i >= 0);
   if (holdJson && !final) {
     const fence = content.indexOf("```");
     const brace = /(^|\n)[ \t]*\{/.exec(content);
+    const label = /(^|\n)[ \t]*[\w-]+[ \t]*(?:\r?\n[ \t]*(?:\{[\s\S]*)?)?$/.exec(content);
     if (fence >= 0) cuts.push(fence);
     if (brace) cuts.push(brace.index + (brace[1] ? 1 : 0));
+    if (label) cuts.push(label.index + (label[1] ? 1 : 0));
   }
   if (cuts.length) return Math.min(...cuts);
   if (final) return content.length;

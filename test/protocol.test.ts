@@ -124,6 +124,9 @@ describe("holding back text-mode tool calls while streaming", () => {
     ['  {"name"', 0],
     ["Let me look.\n```json\n{", 13],
     ["Let me look.\n{", 13],
+    ["Let me look.\nread_file\n", 13],
+    ["Let me look.\nread_file\n{", 13],
+    ["Let me look.\nbash\nls is next.", 29],
     ["The answer is 42.", 17],
   ])("%p shows %p characters", (text, shown) => {
     expect(visibleLength(text, false, true)).toBe(shown);
@@ -150,6 +153,28 @@ describe("tool calls a small model writes in prose", () => {
     const { content, calls } = parseTextToolCalls('Let me look.\n{"name": "read_file", "arguments": {"path": "a.ts"}}', known);
     expect(calls).toEqual([{ name: "read_file", arguments: '{"path":"a.ts"}' }]);
     expect(content).toBe("Let me look.");
+  });
+
+  test("arguments under a fence named after a tool are a call to that tool", () => {
+    const reply =
+      "I apologize for the confusion. Let's list the files and directories within the `inspire_africa` folder using the `ls` command.\n\n" +
+      '```bash\n{\n  "command": "ls /Users/bruno/me/COTE/inspire_africa"\n}\n```';
+    const { content, calls } = parseTextToolCalls(reply, known);
+    expect(calls).toEqual([{ name: "bash", arguments: '{"command":"ls /Users/bruno/me/COTE/inspire_africa"}' }]);
+    expect(content).toBe("I apologize for the confusion. Let's list the files and directories within the `inspire_africa` folder using the `ls` command.");
+  });
+
+  test("arguments under a line naming a tool are a call to that tool", () => {
+    const { content, calls } = parseTextToolCalls('Let me read it.\nread_file\n{"path": "src/a.ts"}', known);
+    expect(calls).toEqual([{ name: "read_file", arguments: '{"path":"src/a.ts"}' }]);
+    expect(content).toBe("Let me read it.");
+  });
+
+  test("a JSON object under a label that isn't a tool stays text", () => {
+    const json = 'The payload:\n```json\n{"command": "ls"}\n```';
+    expect(parseTextToolCalls(json, known)).toEqual({ content: json, calls: [] });
+    const prose = 'Settings:\nconfig\n{"path": "a"}';
+    expect(parseTextToolCalls(prose, known)).toEqual({ content: prose, calls: [] });
   });
 
   test("ordinary code blocks and unknown names stay text", () => {
