@@ -27,12 +27,16 @@ export interface TuiConfig {
   commands?: SlashCommand[];
   /** Take the mouse wheel to scroll the conversation (NGOBE_MOUSE=0 leaves the mouse to the terminal). */
   mouse?: boolean;
+  /** Where pasted clipboard images are saved (under clipboard/). */
+  stateDir?: string;
 }
 
 interface Props {
   store: Store;
   config: TuiConfig;
   onInterrupt: () => boolean;
+  /** ctrl+v: save the clipboard's image and return its path (null: no image). */
+  onPasteImage?: () => Promise<string | null>;
   /** shift+tab */
   onModeCycle?: () => void;
   /** Any typing in the prompt (warms the model up again after a break). */
@@ -43,7 +47,7 @@ const MAX_RENDERED_ENTRIES = 300; // keep long sessions snappy; older ones fall 
 const PREVIEW_LINES = 10;
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 
-export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) {
+export function App({store, config, onInterrupt, onModeCycle, onTyping, onPasteImage}: Props) {
   useSyncExternalStore(store.subscribe, () => store.version);
   const {rows, columns} = useWindowSize();
   const {exit} = useApp();
@@ -161,6 +165,7 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) 
           store={store}
           commands={config.commands ?? []}
           onModeCycle={onModeCycle}
+          onPasteImage={onPasteImage}
           onCtrlC={onInterrupt}
           onActivity={() => {
             onTyping?.();
@@ -180,7 +185,7 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) 
             ? "y allow · n deny · a always this session · esc deny"
             : busy
               ? "esc interrupt · type ahead to queue · PgUp/PgDn or ⇧↑/⇧↓ scroll"
-              : "enter send · / commands · shift+tab mode · scroll: wheel or PgUp/PgDn · /help"}
+              : "enter send · / commands · shift+tab mode · ctrl+v paste image · wheel/PgUp scroll · /help"}
         </Text>
       </Box>
     </Box>
@@ -430,10 +435,12 @@ function InputBox({
   onModeCycle,
   onCtrlC,
   onActivity,
+  onPasteImage,
 }: {
   store: Store;
   commands: SlashCommand[];
   onModeCycle?: () => void;
+  onPasteImage?: () => Promise<string | null>;
   onCtrlC: () => boolean;
   onActivity: () => void;
 }) {
@@ -455,6 +462,23 @@ function InputBox({
     insert(text.replace(/\r\n?/g, "\n"));
     onActivity();
   });
+
+  // ctrl+v: a screenshot on the clipboard becomes a file path in the prompt (cmd+v still pastes text).
+  const pasteImage = () => {
+    if (!onPasteImage) return;
+    void onPasteImage().then((file) => {
+      if (!file) {
+        store.note("info", "No image on the clipboard. Copy a screenshot first (Cmd+Ctrl+Shift+4 on macOS), or drag the file into the terminal.");
+        return;
+      }
+      setValue((v) => {
+        const next = `${v}${v && !v.endsWith(" ") ? " " : ""}${file} `;
+        setCursor(next.length);
+        return next;
+      });
+      onActivity();
+    });
+  };
 
   const showHistory = (index: number | null) => {
     if (index === null) {
@@ -486,6 +510,10 @@ function InputBox({
     }
     if (key.tab && key.shift) {
       if (!store.confirm) onModeCycle?.();
+      return;
+    }
+    if (key.ctrl && input === "v" && !store.confirm) {
+      pasteImage();
       return;
     }
     if (key.ctrl && input === "c") {

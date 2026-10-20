@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { extractDocument, human, MAX_LOAD } from "../documents.js";
 import type { Tool } from "../types.js";
 import { describeImage } from "../vision.js";
+import { wantsUi } from "../design.js";
 import { hashText, isOutsideProject, isSecretPath, mentionsPath, optInt, reqStr, resolveReadable } from "./util.js";
 
 const MAX_LINE = 2000;
@@ -26,6 +27,8 @@ export const readFile: Tool = {
   },
   aliases: { file_path: "path" },
   risk: "safe",
+  // An image goes to a vision model on the server, which may have to load first: minutes, on a CPU.
+  timeoutMs: 360_000,
   // Secrets always ask. A file outside the project is read without asking only when the user's
   // own request names it ("summarize ~/Downloads/report.pdf"); anything else outside asks.
   needs: (a, ctx) => {
@@ -53,7 +56,7 @@ export const readFile: Tool = {
     const buf = stat.size > MAX_LOAD ? await readStart(abs, MAX_LOAD) : await fs.readFile(abs);
 
     const config = ctx.config;
-    const doc = await extractDocument(abs, buf, stat.size, config?.visionModel ? { vision: (f, b) => describeImage(config, f, b, ctx.signal) } : {});
+    const doc = await extractDocument(abs, buf, stat.size, config?.visionModel ? { vision: (f, b) => describeImage(config, f, b, ctx.signal, wantsUi(ctx.request ?? "") ? "ui" : "general") } : {});
     let text: string;
     let header = "";
     if (doc) {

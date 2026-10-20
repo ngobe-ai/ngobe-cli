@@ -91,6 +91,7 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
     log,
     command: opts.command,
     testCommand: project.commands.test,
+    stack: project.stack,
     variant: variant.name,
   });
   return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms, projectMemory };

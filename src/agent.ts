@@ -10,6 +10,8 @@ import type { Memory } from "./memory/store.js";
 import { isCorrection, isResumeRequest, projectRootOf, resumeNote, userNote, type ProjectMemory, type WorkRecord } from "./projectMemory.js";
 import { briefDescription } from "./tools/overview.js";
 import { KNOWN_NAMES } from "./releases/versions.js";
+import { fromImage, uiHint, wantsUi } from "./design.js";
+import { fileHandoff } from "./toolProtocol.js";
 import { redact } from "./log.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
@@ -42,6 +44,8 @@ interface AgentDeps {
   testCommand?: string;
   /** NGOBE.md and the record of the latest work per project (null: memory is off). */
   projectMemory?: ProjectMemory | null;
+  /** The project's stack ("Flutter", "React", "Tailwind" …): how a UI request should be built. */
+  stack?: string[];
 }
 
 export type Outcome = "completed" | "declined" | "limit" | "cancelled" | "error";
@@ -167,6 +171,18 @@ export function researchCalls(input: string, offered: Map<string, Tool>): [strin
   if (offered.has("check_latest_version")) for (const name of named.slice(0, 2)) calls.push(["check_latest_version", { name }]);
   if (offered.has("web_search")) calls.push(["web_search", { query: `${redact(input.replace(/\s+/g, " ").trim()).slice(0, 150)} documentation` }]);
   return calls;
+}
+
+const LENGTH_NUDGE =
+  "Your reply was cut off at the length limit (about 4,000 tokens), so nothing in it was saved. Write big files in parts: write_file with the first part (up to ~200 lines), then add the rest with edit_file, appending after the last lines. Or split the work into smaller files or components.";
+
+function isJsonObject(s: string): boolean {
+  try {
+    const v = JSON.parse(s) as unknown;
+    return !!v && typeof v === "object" && !Array.isArray(v);
+  } catch {
+    return false;
+  }
 }
 
 const RUN_TESTS = /\b(?:re-?run|run|execute)\b[^.\n]{0,25}\btests?\b/i;
@@ -385,6 +401,7 @@ export class Agent {
     const repeats = new Map<string, number>();
     this.failedCalls.clear();
     let nudges = 0;
+    let cutoffs = 0;
     let changeNudged = false;
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
@@ -415,7 +432,8 @@ export class Agent {
     this.lookedAt = null;
     // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
-    const extras = [resumed ? resumeNote(resumed) : "", fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
+    const design = wantsUi(userInput) ? uiHint(this.d.stack ?? [], fromImage(userInput)) : "";
+    const extras = [resumed ? resumeNote(resumed) : "", design, fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
     this.messages.push({ role: "user", content: [userInput, ...extras].join("\n\n") });
     this.status = { label: "Thinking", since: started, tokens: 0 };
     this.running = true;
@@ -472,6 +490,15 @@ export class Agent {
           signal,
         );
         ui.endTurn();
+        // The whole new file written in the reply instead of with write_file (a small-model habit):
+        // save it, rather than spend minutes having the model write it again.
+        if (turn.toolCalls.length === 0 && byName.has("write_file")) {
+          const file = fileHandoff(turn.content, userInput, (p) => fs.existsSync(path.resolve(config.cwd, p)));
+          if (file) {
+            turn.toolCalls = [{ id: `call_${Date.now()}_file`, name: "write_file", arguments: JSON.stringify({ path: file.path, content: file.content }) }];
+            turn.content = file.before;
+          }
+        }
         // "Let's run the tests again." with no call (a small-model habit): run them, with the
         // command used before in this session, or the project's. Same permission check as ever.
         if (turn.toolCalls.length === 0 && byName.has("bash") && RUN_TESTS.test(turn.content) && announcesAction(turn.content, true)) {
@@ -495,6 +522,17 @@ export class Agent {
           tool_calls: turn.toolCalls.map((c) => c.name),
         });
 
+        // Cut off at the length limit (MAX_REPLY_TOKENS): its tool calls are incomplete and its code
+        // unfinished. Keep only the prose (the partial code would be re-read every turn) and ask for
+        // the work in parts; twice at most, then the reply stands as it is.
+        if (turn.truncated && cutoffs < 2 && !turn.toolCalls.some((c) => isJsonObject(c.arguments))) {
+          cutoffs++;
+          const prose = turn.content.split("```")[0].trim();
+          this.messages.push({ role: "assistant", content: `${prose ? `${prose}\n` : ""}[reply cut off at the length limit]` });
+          this.messages.push({ role: "user", content: LENGTH_NUDGE });
+          this.d.log?.event("nudge", { run: runId, kind: "length", reply: turn.content.slice(0, 120) });
+          continue;
+        }
         this.messages.push({
           role: "assistant",
           content: turn.content || null,
@@ -822,6 +860,7 @@ export class Agent {
     const { config, memory, ui, perms } = this.d;
     return {
       cwd: config.cwd,
+      request: this.request,
       signal,
       config,
       files: this.files,

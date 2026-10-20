@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { validateArgs } from "../src/tools/schema.js";
-import { parseTextToolCalls, toTextMessages, visibleLength } from "../src/toolProtocol.js";
+import { fileHandoff, parseTextToolCalls, toTextMessages, visibleLength } from "../src/toolProtocol.js";
 import type { Message } from "../src/types.js";
 
 describe("argument validation", () => {
@@ -190,6 +190,30 @@ describe("tool calls a small model writes in prose", () => {
     ]) {
       expect(parseTextToolCalls(text, known)).toEqual({ content: text, calls: [] });
     }
+  });
+
+  test("a file written in the reply instead of with write_file is saved as the file the request named", () => {
+    // Seen live: "Reproduce this UI as login.html" → the whole page in a ```html block, no tool call.
+    const reply =
+      "To reproduce the UI as `login.html`, I'll create a single HTML file with embedded CSS. Here's the complete file:\n\n```html\n<!DOCTYPE html>\n<html lang=\"en\">\n<body>\n  <h1>Welcome back</h1>\n</body>\n</html>\n```\n\nTo see the login page, open this HTML file in a web browser.";
+    const none = () => false;
+    expect(fileHandoff(reply, "Reproduce this UI as login.html: /tmp/login-mockup.png", none)).toEqual({
+      path: "login.html",
+      content: '<!DOCTYPE html>\n<html lang="en">\n<body>\n  <h1>Welcome back</h1>\n</body>\n</html>\n',
+      before: "To reproduce the UI as `login.html`, I'll create a single HTML file with embedded CSS. Here's the complete file:",
+    });
+    // The file the reply names counts too, when the request names none.
+    expect(fileHandoff(reply, "reproduce this mockup as a web page", none)?.path).toBe("login.html");
+  });
+
+  test("no handoff without a new file named, with an existing file, or with several or unfinished blocks", () => {
+    const one = "Here it is:\n```html\n<p>a</p>\n<p>b</p>\n<p>c</p>\n```";
+    const none = () => false;
+    expect(fileHandoff(one, "how do I build a login page?", none)).toBeNull();
+    expect(fileHandoff(one, "rewrite index.html", (p) => p === "index.html")).toBeNull();
+    expect(fileHandoff(`${one}\n${one}`, "create page.html", none)).toBeNull();
+    expect(fileHandoff("Here:\n```html\n<p>a</p>\n<p>b</p>\n<p>c", "create page.html", none)).toBeNull();
+    expect(fileHandoff("```css\nbody{}\na{}\np{}\n```", "create page.html", none)).toBeNull(); // CSS is not page.html
   });
 
   test("a JSON object under a label that isn't a tool stays text", () => {

@@ -51,6 +51,7 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
       ["express", "Express"],
       ["@nestjs/core", "NestJS"],
       ["vite", "Vite"],
+      ["tailwindcss", "Tailwind"],
       ["ink", "Ink"],
     ];
     for (const [dep, label] of frameworks) if (deps[dep]) info.stack.push(label);

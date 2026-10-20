@@ -28,6 +28,8 @@ export interface AssistantTurn {
   /** Time to the first streamed token, and to the end of the response. */
   firstTokenMs: number | null;
   totalMs: number;
+  /** The reply hit the length limit (max_tokens) and was cut off. */
+  truncated?: boolean;
 }
 
 export interface ModelInfo {
@@ -155,6 +157,7 @@ export class LLM {
     let shown = 0;
     const holdJson = tools.length > 0 && !this.nativeToolsSeen;
     let usage: Usage | null = null;
+    let truncated = false;
     // Tool calls arrive in fragments keyed by index; stitch them back together.
     const partial = new Map<number, ToolCall>();
 
@@ -168,6 +171,7 @@ export class LLM {
       for await (const chunk of stream) {
         bump();
         if (chunk.usage) usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens, estimated: false };
+        if (chunk.choices[0]?.finish_reason === "length") truncated = true;
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
         if ((delta.content || delta.tool_calls) && firstTokenMs === null) firstTokenMs = Date.now() - started;
@@ -219,7 +223,7 @@ export class LLM {
       output: chars(content) + toolCalls.reduce((n, c) => n + chars(c.arguments), 0),
       estimated: true,
     };
-    return { content, toolCalls, usage, model, firstTokenMs, totalMs: Date.now() - started };
+    return { content, toolCalls, usage, model, firstTokenMs, totalMs: Date.now() - started, truncated };
   }
 
   /**

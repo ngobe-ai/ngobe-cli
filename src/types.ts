@@ -38,6 +38,8 @@ export interface ToolView {
 
 export interface ToolContext {
   cwd: string;
+  /** The user's current request (an image read for "reproduce this UI" gets a blueprint). */
+  request?: string;
   signal?: AbortSignal;
   /** Present when running inside the agent; tools fall back to defaults without it. */
   config?: Config;

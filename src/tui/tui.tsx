@@ -1,4 +1,7 @@
+import os from "node:os";
+import path from "node:path";
 import {render} from "ink";
+import {saveClipboardImage} from "../clipboard.js";
 import {Store} from "./store.js";
 import {App, type TuiConfig} from "./App.js";
 import type {Mode} from "../config.js";
@@ -39,6 +42,7 @@ export class Tui implements Ui {
           return handled;
         }}
         onModeCycle={() => this.modeCycle()}
+        onPasteImage={() => saveClipboardImage(path.join(config.stateDir ?? os.tmpdir(), "clipboard"))}
         onTyping={() => {
           if (Date.now() - this.lastTyping < 5_000) return;
           this.lastTyping = Date.now();

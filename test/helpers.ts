@@ -52,6 +52,8 @@ export function recordingUi(answer = "n") {
 export interface FakeTurn {
   content?: string;
   toolCalls?: { name: string; arguments: string }[];
+  /** "length": the reply hit max_tokens and was cut off. */
+  finish?: "stop" | "length";
 }
 
 /**
@@ -98,6 +100,7 @@ export function fakeModel(turns: FakeTurn[], onRequest?: (body: Record<string, u
         chunks.push(chunk({ tool_calls: [{ index: i, id: `call_${i}`, type: "function", function: { name: c.name, arguments: "" } }] }));
         chunks.push(chunk({ tool_calls: [{ index: i, function: { arguments: c.arguments } }] }));
       });
+      if (turn.finish) chunks.push({ id: "x", object: "chat.completion.chunk", created: 0, model: "fake-model", choices: [{ index: 0, delta: {}, finish_reason: turn.finish }] });
       const body2 = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n";
       return new Response(body2, { headers: { "content-type": "text/event-stream" } });
     },

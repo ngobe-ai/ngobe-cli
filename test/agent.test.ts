@@ -470,6 +470,41 @@ describe("agent loop", () => {
     expect((model.requests[0].messages as Message[]).filter((m) => m.role === "tool")).toHaveLength(2);
   });
 
+  test("a UI to build from an image comes with design guidance", async () => {
+    const { agent, model, config } = setup([{ content: "Done." }], []);
+    fs.writeFileSync(path.join(config.cwd, "login.png"), "png");
+    await agent.run("reproduce this UI as a single page: login.png", new AbortController().signal);
+    const asked = (model.requests[0].messages as Message[]).at(-1)!.content as string;
+    expect(asked).toContain("reproduce this UI as a single page: login.png");
+    expect(asked).toMatch(/Reproduce it faithfully/);
+  });
+
+  test("a new file written in the reply is saved with write_file", async () => {
+    const write = counter("write_file", "write");
+    write.tool.parameters = { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] };
+    const reply = "Here's the complete file:\n\n```html\n<!DOCTYPE html>\n<html>\n<body><h1>Welcome back</h1></body>\n</html>\n```\n\nOpen it in a browser.";
+    const { agent, model } = setup([{ content: reply }, { content: "Created login.html." }], [write.tool]);
+    const result = await agent.run("Reproduce this UI as login.html", new AbortController().signal);
+    expect(write.calls).toEqual([{ path: "login.html", content: "<!DOCTYPE html>\n<html>\n<body><h1>Welcome back</h1></body>\n</html>\n" }]);
+    expect(result.text).toBe("Created login.html.");
+    // The page isn't kept twice in the conversation: the reply keeps only its prose.
+    const history = model.requests[1].messages as Message[];
+    expect(history.find((m) => m.role === "assistant")?.content).toBe("Here's the complete file:");
+  });
+
+  test("a reply cut off at the length limit saves nothing and is told to write in parts", async () => {
+    const write = counter("write_file", "write");
+    write.tool.parameters = { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] };
+    const cut = "Here's the dashboard:\n\n```html\n<!DOCTYPE html>\n<html>\n<body>\n<div class=\"sidebar\">";
+    const { agent, model } = setup([{ content: cut, finish: "length" }, { toolCalls: [{ name: "write_file", arguments: '{"path": "dashboard.html", "content": "<p>part 1</p>"}' }] }, { content: "Wrote the first part." }], [write.tool]);
+    await agent.run("Reproduce this dashboard as dashboard.html", new AbortController().signal);
+    expect(write.calls).toEqual([{ path: "dashboard.html", content: "<p>part 1</p>" }]);
+    const second = model.requests[1].messages as Message[];
+    expect(second.at(-1)?.content).toMatch(/cut off at the length limit[\s\S]*in parts/);
+    // The cut-off code isn't kept in the conversation (it would be re-read on every turn).
+    expect(second.at(-2)?.content).not.toContain("sidebar");
+  });
+
   test("other requests don't get an overview", async () => {
     const { tool, calls } = counter("project_overview");
     const { agent } = setup([{ content: "done" }, { content: "done" }], [tool]);

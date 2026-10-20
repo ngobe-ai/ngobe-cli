@@ -81,3 +81,23 @@ test("the mouse wheel scrolls the conversation; the header and the prompt stay, 
   expect(stdout.last).toContain("line 40");
   expect(stdout.last).not.toContain("[<65");
 });
+
+test("ctrl+v pastes a screenshot from the clipboard as a file path in the prompt", async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  const store = new Store("edit");
+  void store.ask();
+  let asked = 0;
+  const app = render(
+    <App store={store} config={{ model: "m", baseURL: "http://x", cwd: "/tmp/p", mode: "edit", version: "1.0.0" }} onInterrupt={() => false} onPasteImage={async () => (++asked, "/tmp/state/clipboard/shot-1.png")} />,
+    { stdout: stdout as never, stdin: stdin as never, debug: true, exitOnCtrlC: false, patchConsole: false },
+  );
+  unmounts.push(() => app.unmount());
+  await tick();
+  stdin.push("rebuild this UI ");
+  await tick();
+  stdin.push("\x16"); // ctrl+v
+  await tick();
+  expect(asked).toBe(1);
+  expect(stdout.last).toContain("rebuild this UI /tmp/state/clipboard/shot-1.png");
+});

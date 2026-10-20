@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { childEnv } from "./childEnv.js";
 import type { Config } from "./config.js";
+import { measurePalette } from "./design.js";
 
 /**
  * Images for a coding model that can't see: a small vision model on the same server (visionModel,
@@ -15,11 +16,19 @@ import type { Config } from "./config.js";
 
 const PROMPT =
   "You are helping a software developer who can't see this image. First, transcribe every piece of visible text exactly as written (code, error messages, file paths with line numbers, UI labels, numbers), keeping line breaks. Then, in two to four sentences, describe what the image shows (the kind of screen, diagram or photo, layout, anything notable).";
+// For rebuilding a UI: a compact blueprint, not a caption. One line per element keeps a 2B model
+// from padding (and inventing); its example is unlike most screens so it isn't copied.
+const UI_PROMPT = `Describe this user interface so a developer who can't see it can rebuild it. Write a compact blueprint: one line per element, in reading order (top to bottom, left to right), for example:
+- page: dark background; sidebar on the left (about a fifth of the width), main area on the right
+- nav item "Library": book icon, white text, highlighted with a green bar on its left
+- card "Top hits": square album image on top, bold white title, gray subtitle, rounded corners
+- button "Play": round, green, black play icon
+Only include what you can see; never invent elements. Give every text exactly as written. For each element say its alignment (left, centered, right) and whether it spans the full width. Describe colors in words (exact values are measured separately) and sizes relative to the screen or the container. End with one line on the overall style: spacing, corner rounding, shadows, font weights.`;
 const MAX_SIDE = 1280;
 const MAX_DIRECT = 1_500_000;
 
 /** What the vision model says about the image, or null when it can't be sent. Throws on server errors. */
-export async function describeImage(config: Config, file: string, buf: Uint8Array, signal?: AbortSignal): Promise<string | null> {
+export async function describeImage(config: Config, file: string, buf: Uint8Array, signal?: AbortSignal, purpose: "general" | "ui" = "general"): Promise<string | null> {
   if (!config.visionModel) return null;
   const image = await prepare(file, buf);
   if (!image) return null;
@@ -31,9 +40,9 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
     body: JSON.stringify({
       model: config.visionModel,
       stream: false,
-      max_tokens: 700,
+      max_tokens: purpose === "ui" ? 900 : 700,
       temperature: 0.1,
-      messages: [{ role: "user", content: [{ type: "text", text: PROMPT }, { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data.toString("base64")}` } }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: purpose === "ui" ? UI_PROMPT : PROMPT }, { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data.toString("base64")}` } }] }],
     }),
     // A CPU server loads the vision model on first use: allow minutes, not Bun's default 300 s cut-off.
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
@@ -41,7 +50,11 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
   } as RequestInit);
   if (!res.ok) throw new Error(`vision model ${config.visionModel}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  return json.choices?.[0]?.message?.content?.trim() || null;
+  const seen = json.choices?.[0]?.message?.content?.trim();
+  if (!seen) return null;
+  if (purpose !== "ui") return seen;
+  const palette = await measurePalette(file);
+  return palette.length ? `${seen}\n\nMeasured colors (from the pixels, most used first; use these exact values): ${palette.map((c) => `${c.hex} ${c.share}%`).join(", ")}` : seen;
 }
 
 /** The image as the server can take it: PNG/JPEG as is when small, else a converted JPEG. */

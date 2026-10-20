@@ -131,6 +131,37 @@ export function shellHandoff(text: string): { command: string; before: string } 
   return { command: lines.join(" && "), before: text.slice(0, m.index).trim() };
 }
 
+// Fence languages that can hold a file with this extension.
+const FENCE_LANGS: Record<string, string[]> = {
+  html: ["html", "htm"], htm: ["html", "htm"], css: ["css"], scss: ["scss", "css"], js: ["js", "javascript"], mjs: ["js", "javascript"],
+  jsx: ["jsx", "javascript", "js"], ts: ["ts", "typescript"], tsx: ["tsx", "typescript", "ts"], vue: ["vue", "html"], svelte: ["svelte", "html"],
+  py: ["py", "python"], dart: ["dart"], go: ["go"], rs: ["rs", "rust"], java: ["java"], kt: ["kt", "kotlin"], swift: ["swift"], rb: ["rb", "ruby"],
+  php: ["php"], json: ["json"], yaml: ["yaml", "yml"], yml: ["yaml", "yml"], md: ["md", "markdown"], sql: ["sql"], sh: ["sh", "bash", "shell", "zsh"],
+  c: ["c"], cpp: ["cpp", "c++"], cs: ["cs", "csharp"], xml: ["xml"], svg: ["svg", "xml"], toml: ["toml"],
+};
+const FILE_NAME = /(?<![\w/.-])((?:[\w@+-]+\/)*[\w@+-][\w.@+-]*\.([A-Za-z0-9]{1,6}))(?![\w-])/g;
+
+/**
+ * A small model asked to create a file often writes it in its reply ("Here's the complete file:
+ * ```html …```") and stops. When the request (or else the reply) names a file that doesn't exist
+ * yet and the reply has exactly one complete code block for that kind of file, it becomes a
+ * write_file call, with the usual permission check. Existing files are left to edit_file.
+ */
+export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { path: string; content: string; before: string } | null {
+  const blocks = [...reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
+  if (!blocks.length) return null;
+  const names = (text: string) => [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !exists(n.path));
+  for (const candidates of [names(request), names(reply)]) {
+    for (const file of candidates) {
+      const langs = FENCE_LANGS[file.ext];
+      const fits = blocks.filter((b) => langs.includes(b[1].toLowerCase()) || (!b[1] && blocks.length === 1));
+      if (fits.length !== 1 || fits[0][2].split("\n").length < 3) continue;
+      return { path: file.path, content: `${fits[0][2]}\n`, before: reply.slice(0, fits[0].index).trim() };
+    }
+  }
+  return null;
+}
+
 /** The JSON object starting at text[start] (a "{"), matching braces outside strings. */
 function balancedObject(text: string, start: number): string | null {
   let depth = 0;
