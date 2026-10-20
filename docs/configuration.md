@@ -83,7 +83,10 @@ Version, release-note and advisory lookups need no keys. Without a search provid
 
 | Variable | Config key | Default | Meaning |
 |---|---|---|---|
-| `NGOBE_MEMORY` | `memory` | `1` | `0` turns memory off completely (nothing opened or written) |
+| `NGOBE_MEMORY` | `memory` | `1` | `0` turns memory off completely (nothing opened or written, NGOBE.md included) |
+| `NGOBE_MEMORY_FILE` | (environment only) | `<config dir>/NGOBE.md` | Ngobe's global memory: about you, lessons, and what was done in each project. Plain markdown; edit it freely |
+| `NGOBE_VISION_MODEL` | `visionModel` | (none) | A vision model on the same server (e.g. `docker.io/ngobe/qwen3-vl-2b:6k`). `read_file` on an image sends it there and gives the coding model the transcribed text and a description. Without one, images get OCR when tesseract is installed |
+| `NGOBE_MOUSE` | `mouse` | `1` | The chat takes the mouse wheel to scroll the conversation. `0` leaves the mouse to the terminal (native selection; scroll with PgUp/PgDn) |
 | `NGOBE_STATE_DIR` | `stateDir` | `$XDG_STATE_HOME/ngobe` (`~/.local/state/ngobe`) | `ngobe.db` (memory) and `logs/` (JSONL audit log, 14 days) |
 | `NGOBE_CACHE_DIR` | `cacheDir` | `$XDG_CACHE_HOME/ngobe` (`~/.cache/ngobe`) | HTTP cache; safe to delete |
 | `NGOBE_DEBUG` / `--debug` | `debug` | off | Print each audit event (tool choice, timings) as it happens |

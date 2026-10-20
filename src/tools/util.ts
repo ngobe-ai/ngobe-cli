@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Args, ToolContext } from "../types.js";
 
@@ -29,6 +30,39 @@ export function resolveInside(cwd: string, p: unknown): string {
   }
   // One name per file (under the project root as opened), so read-before-edit tracking matches.
   return isInside(cwd, p) ? abs : path.join(path.resolve(cwd), path.relative(root, real));
+}
+
+/** "~/Downloads/a.pdf" → an absolute path. */
+export function expandHome(p: string): string {
+  return p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+/** Whether a path the model gave names a place outside the project (as written, before links). */
+export function isOutsideProject(cwd: string, p: string): boolean {
+  const root = path.resolve(cwd);
+  const rel = path.relative(root, path.resolve(root, expandHome(p)));
+  return rel.startsWith("..") || path.isAbsolute(rel);
+}
+
+/**
+ * A path read_file may read: inside the project as resolveInside allows, or a file outside it the
+ * user pointed at (~/Downloads/report.pdf; the permission check saw it in the request or asked).
+ * A path written inside the project that leads out through a link is still refused.
+ */
+export function resolveReadable(cwd: string, p: unknown): string {
+  if (typeof p !== "string" || !p) throw new Error('argument "path" must be a non-empty string');
+  const expanded = expandHome(p);
+  return isOutsideProject(cwd, expanded) ? path.resolve(cwd, expanded) : resolveInside(cwd, expanded);
+}
+
+/** Whether the user's request names this file: as written, absolute, with ~, or by a distinctive file name. */
+export function mentionsPath(request: string, p: string): boolean {
+  const said = request.replace(/\\ /g, " ").toLowerCase();
+  const abs = path.resolve(expandHome(p)).toLowerCase();
+  const home = os.homedir().toLowerCase();
+  const tilde = abs.startsWith(home + path.sep) ? `~${abs.slice(home.length)}` : abs;
+  const base = path.basename(abs);
+  return [p.toLowerCase(), abs, tilde].some((x) => said.includes(x)) || (base.length >= 5 && base.includes(".") && said.includes(base));
 }
 
 /** Real path with links resolved; for a path that doesn't exist yet, its nearest existing parent's. */

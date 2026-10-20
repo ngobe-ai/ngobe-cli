@@ -4,7 +4,7 @@ import path from "node:path";
 import { Agent } from "../src/agent.js";
 import { LLM } from "../src/llm.js";
 import { Permissions } from "../src/permissions.js";
-import { ProjectMemory, isResumeRequest, userNote } from "../src/projectMemory.js";
+import { ProjectMemory, isCorrection, isResumeRequest, userNote } from "../src/projectMemory.js";
 import type { Message, Tool } from "../src/types.js";
 import { fakeModel, recordingUi, testConfig, tmpDir, type FakeTurn } from "./helpers.js";
 
@@ -107,6 +107,27 @@ describe("NGOBE.md", () => {
     expect(fromWorkspace).toContain("fix the crash");
     expect(memory.contextFor(path.join(cwd, "hype", "lib"))).toContain("fix the crash"); // inside the project
     expect(fromWorkspace.length).toBeLessThan(2_200);
+  });
+});
+
+describe("learning from the user's corrections", () => {
+  test("a correction becomes a lesson with the request it corrects; a follow-up doesn't", async () => {
+    expect(isCorrection("you didn't give the version")).toBe(true);
+    expect(isCorrection("No, I asked for the installed one")).toBe(true);
+    expect(isCorrection("that's wrong, it's 3.47.7")).toBe(true);
+    expect(isCorrection("it still doesn't work")).toBe(true);
+    expect(isCorrection("now add tests")).toBe(false);
+    expect(isCorrection("nothing else, thanks")).toBe(false);
+    const cwd = workspace();
+    const memory = memoryIn();
+    const { agent } = agentWith([{ content: "I'll run flutter --version." }, { content: "3.47.7" }, { content: "ok" }], cwd, memory);
+    await agent.run("confirm it's the one installed on my machine", new AbortController().signal);
+    await agent.run("you didn't give the version", new AbortController().signal);
+    await agent.run("now add tests", new AbortController().signal);
+    const md = fs.readFileSync(memory.file, "utf8");
+    expect(md).toContain('after "confirm it\'s the one installed on my machine" the user said: "you didn\'t give the version"');
+    expect(md).not.toContain("now add tests");
+    expect(memory.contextFor(cwd)).toContain("you didn't give the version");
   });
 });
 

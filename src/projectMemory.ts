@@ -84,6 +84,12 @@ export class ProjectMemory {
     });
   }
 
+  /** Learning from the user: what they corrected, with the request it was about. */
+  feedback(previousRequest: string, correction: string): void {
+    const text = `after "${oneLine(previousRequest).slice(0, 120)}" the user said: "${oneLine(correction).slice(0, 200)}"`;
+    this.lesson(`feedback-${crypto.createHash("sha1").update(text).digest("hex").slice(0, 6)}`, text);
+  }
+
   /** Add a dated entry to a project's log (the project moves to the top). `about` fills in what the project is, once. */
   logWork(dir: string, entry: string, about?: string): void {
     const abs = path.resolve(dir);
@@ -170,6 +176,14 @@ const RESUME =
 /** "continue", "where did we stop?", "pick up where we left off" (alone, not "continue the loop until …"). */
 export function isResumeRequest(text: string): boolean {
   return RESUME.test(text.trim());
+}
+
+const CORRECTION =
+  /^(?:no\b|nope\b|wrong\b|incorrect\b|that'?s (?:wrong|incorrect|not (?:it|right|what|correct))|this is (?:wrong|not)|you (?:didn'?t|did not|forgot|missed|ignored|haven'?t|have not|still|were supposed to)|not what i (?:asked|wanted|meant)|i (?:said|asked|told you|meant)\b|still (?:not|wrong|broken|failing)|it (?:still )?(?:doesn'?t|does not|didn'?t|did not|isn'?t|is not) (?:work|working|right|correct)|why did(?:n'?t)? you|stop\b|don'?t\b|do not\b)/i;
+
+/** The user correcting the previous answer ("you didn't give the version", "no, the installed one"). */
+export function isCorrection(text: string): boolean {
+  return CORRECTION.test(text.trim());
 }
 
 /** What to keep from "remember that X" / "always …" / "I prefer …", or null. */

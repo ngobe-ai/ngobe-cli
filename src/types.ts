@@ -68,6 +68,13 @@ export type Risk = "safe" | "network" | "write" | "exec";
  */
 export type Need = "none" | "approval" | "explicit";
 
+/** What a permission decision may depend on besides the arguments. */
+export interface NeedContext {
+  cwd: string;
+  /** The user's current request: a file it names may be read even outside the project. */
+  request?: string;
+}
+
 export interface Tool {
   name: string;
   description: string;
@@ -75,7 +82,7 @@ export interface Tool {
   parameters: Record<string, unknown>;
   risk: Risk;
   /** Approval for these arguments. Default: none for safe/network tools, approval for write/exec. */
-  needs?(args: Args): Need;
+  needs?(args: Args, ctx?: NeedContext): Need;
   /** Wall-clock limit for one call. Default 120s; 0 = the tool enforces its own (bash). */
   timeoutMs?: number;
   /** Short human-readable summary used in permission prompts. */

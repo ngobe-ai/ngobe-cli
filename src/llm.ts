@@ -4,6 +4,9 @@ import type { Message, Tool } from "./types.js";
 import { parseTextToolCalls, textProtocolPrompt, toTextMessages, visibleLength } from "./toolProtocol.js";
 import { ensureTunnel } from "./tunnel.js";
 
+/** The longest reply one request may produce. */
+const MAX_REPLY_TOKENS = 4096;
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -157,7 +160,9 @@ export class LLM {
 
     try {
       const stream = await this.client.chat.completions.create(
-        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true, temperature: this.temperature },
+        // max_tokens: on a CPU a runaway reply (a repetition loop, a file-by-file listing) would run for many
+        // minutes; 4,096 is still room for writing a whole file.
+        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true, temperature: this.temperature, max_tokens: MAX_REPLY_TOKENS },
         { signal: combined },
       );
       for await (const chunk of stream) {

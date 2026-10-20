@@ -42,6 +42,10 @@ export interface Config {
   /** HTTP response cache. */
   cacheDir: string;
   memory: boolean;
+  /** A vision model on the same server that describes images for the coding model ("" = none). */
+  visionModel: string;
+  /** The chat takes the mouse wheel to scroll the conversation (NGOBE_MOUSE=0: the terminal keeps it). */
+  mouse: boolean;
   /** NGOBE.md: the global memory, next to config.json unless NGOBE_MEMORY_FILE says otherwise. */
   memoryFile: string;
   /** Interactive sessions: have the server process the fixed prompt prefix before the first request. */
@@ -134,7 +138,7 @@ Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
-  NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
+  NGOBE_VISION_MODEL (describes images), NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
   BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, NGOBE_SEARXNG_KEY, GITHUB_TOKEN, NGOBE_DEBUG
 Config file: $XDG_CONFIG_HOME/ngobe/config.json (default ~/.config/ngobe/config.json).
 Secrets (API keys, tokens) are read from the environment only.`;
@@ -310,6 +314,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     stateDir,
     cacheDir,
     memory: bool(setting("MEMORY", "memory").raw, true),
+    mouse: bool(setting("MOUSE", "mouse").raw, true),
+    visionModel: String(setting("VISION_MODEL", "visionModel").raw ?? ""),
     memoryFile: envVar(env, "MEMORY_FILE") ?? path.join(path.dirname(configFilePath(env)), "NGOBE.md"),
     warmup: bool(setting("WARMUP", "warmup").raw, true),
     keepWarmMinutes: int(setting("KEEP_WARM_MINUTES", "keepWarmMinutes"), 30, 0),

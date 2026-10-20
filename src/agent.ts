@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Config, Mode } from "./config.js";
 import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
-import { isResumeRequest, projectRootOf, resumeNote, userNote, type ProjectMemory, type WorkRecord } from "./projectMemory.js";
+import { isCorrection, isResumeRequest, projectRootOf, resumeNote, userNote, type ProjectMemory, type WorkRecord } from "./projectMemory.js";
 import { briefDescription } from "./tools/overview.js";
 import { KNOWN_NAMES } from "./releases/versions.js";
 import { redact } from "./log.js";
@@ -126,6 +127,30 @@ const NUDGE = "Continue: make the tool call now, in this reply. A reply without 
 // "Analyse / understand / explore … the project / app / codebase": a request to get to know it.
 const EXPLORE = /\b(?:analy[sz]e|understand|explore|overview|walk (?:me )?through|familiari[sz]e|get to know|tour of|describe|summari[sz]e)\b/i;
 const SUBJECT = /\b(?:project|repo(?:sitory)?|codebase|code base|app|application|folder|directory|monorepo|workspace|structure)\b/i;
+/**
+ * Files the request names that exist ("summarize ~/Downloads/report.pdf", "the bug in src/sum.js"),
+ * at most three: read before the first turn, since a small model often answers "I don't have access
+ * to the file" instead of reading it. Quoted names, absolute and ~ paths (drag-and-drop escapes
+ * spaces with "\ "), and relative paths with an extension count; URLs don't.
+ */
+export function namedFiles(input: string, cwd: string): string[] {
+  const candidates = [
+    ...[...input.matchAll(/[`'"]([^`'"\n]{2,300})[`'"]/g)].map((m) => m[1]),
+    ...[...input.matchAll(/(?:^|[\s(])((?:~|\.{1,2})?\/(?:\\ |[^\s'"`])+)/g)].map((m) => m[1].replace(/\\ /g, " ")),
+    ...[...input.matchAll(/(?:^|[\s(])((?:[\w.@+-]+\/)*[\w@+-][\w.@+-]*\.[A-Za-z0-9]{1,8})(?=$|[\s,;:!?)]|\.(?:\s|$))/g)].map((m) => m[1]),
+  ].map((c) => c.replace(/[.,;:!?)]+$/, ""));
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    if (c.includes("://") || found.length >= 3) continue;
+    const abs = path.resolve(cwd, c === "~" || c.startsWith("~/") ? path.join(os.homedir(), c.slice(1)) : c);
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    if (fs.statSync(abs, { throwIfNoEntry: false })?.isFile()) found.push(c);
+  }
+  return found;
+}
+
 // "Add / build / integrate …" with a framework, library or service in it: worth checking current docs first.
 const BUILD = /\b(?:build|create|implement|add|integrate|set ?up|scaffold|develop|migrate|upgrade|install|connect|configure|use)\b/i;
 const SERVICE =
@@ -189,6 +214,10 @@ export class Agent {
   /** What this run has done, for NGOBE.md and "where did we stop?" (saved once a tool has run). */
   private work: WorkRecord | null = null;
   private workTouched = false;
+  /** The user's current request: files it names may be read even outside the project. */
+  private request = "";
+  /** The request before it in this session, for learning from a correction of its answer. */
+  private lastRequest: string | null = null;
   /** The folder a project_overview looked at in this run: the project the work was about. */
   private lookedAt: string | null = null;
   /** This run's failed calls by tool: one that later works with other arguments becomes a lesson. */
@@ -360,9 +389,15 @@ export class Agent {
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
+    this.request = userInput;
+    this.d.perms.setRequest?.(config.cwd, userInput);
     const pm = this.d.projectMemory;
     const note = pm ? userNote(userInput) : null;
     if (note) this.safely(() => pm!.noteAboutUser(note));
+    // A correction of the last answer is a lesson for every later session.
+    const previous = this.lastRequest;
+    if (pm && previous && isCorrection(userInput)) this.safely(() => pm.feedback(previous, userInput));
+    this.lastRequest = userInput;
     // "Where did we stop?" in a new session (after a crash or a dropped connection): the record of the
     // last work in this folder or its project comes with the request.
     let resumed: WorkRecord | null = null;
@@ -392,7 +427,8 @@ export class Agent {
       // current version and docs (the model's training data is older than the libraries).
       const byName = new Map(toolsForMode(this.d.tools, this.mode).map((t) => [t.name, t]));
       const overview = this.overviewTarget(userInput);
-      const auto: [string, Args][] = [...(overview !== null ? [["project_overview", { path: overview }] as [string, Args]] : []), ...researchCalls(userInput, byName)];
+      const named = byName.has("read_file") ? namedFiles(userInput, config.cwd).map((f): [string, Args] => ["read_file", { path: f, limit: 150 }]) : [];
+      const auto: [string, Args][] = [...(overview !== null ? [["project_overview", { path: overview }] as [string, Args]] : []), ...named, ...researchCalls(userInput, byName)];
       if (auto.length) {
         this.tellMode();
         const calls: ToolCall[] = auto.map(([name, args], i) => ({ id: `call_${Date.now()}_auto${i}`, name, arguments: JSON.stringify(args) }));
@@ -544,7 +580,8 @@ export class Agent {
     result: RunResult,
   ): Promise<{ outputs: string[]; declined: boolean }> {
     const prepared = calls.map((c) => this.prepare(c, byName, repeats));
-    const quiet = (p: Prepared) => !p.failure && p.tool && (p.tool.risk === "safe" || p.tool.risk === "network") && needOf(p.tool, p.args!) === "none";
+    const quiet = (p: Prepared) =>
+      !p.failure && p.tool && (p.tool.risk === "safe" || p.tool.risk === "network") && needOf(p.tool, p.args!, { cwd: this.d.config.cwd, request: this.request }) === "none";
     const outputs: string[] = new Array(calls.length);
     let declined = false;
 

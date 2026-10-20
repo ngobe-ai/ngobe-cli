@@ -1,7 +1,7 @@
 import os from "node:os";
 import chalk from "chalk";
 import {memo, useEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
-import {Box, Text, Spacer, measureElement, useApp, useInput, usePaste, useWindowSize} from "ink";
+import {Box, Text, Spacer, measureElement, useApp, useInput, usePaste, useStdin, useWindowSize} from "ink";
 import type {DOMElement} from "ink";
 import type {Mode} from "../config.js";
 import type {PreviewLine, Todo, ToolView} from "../types.js";
@@ -13,6 +13,10 @@ import {renderMarkdown} from "../markdown.js";
 import type {SlashCommand} from "../slash.js";
 import type {EntryKind, NoteTone, Store} from "./store.js";
 
+/** SGR mouse reports (enabled in tui.tsx): button 64 is the wheel turned up, 65 down. */
+// eslint-disable-next-line no-control-regex
+const MOUSE_REPORT = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
+
 export interface TuiConfig {
   model: string;
   baseURL: string;
@@ -21,6 +25,8 @@ export interface TuiConfig {
   version: string;
   /** For the completion menu that opens on "/". */
   commands?: SlashCommand[];
+  /** Take the mouse wheel to scroll the conversation (NGOBE_MOUSE=0 leaves the mouse to the terminal). */
+  mouse?: boolean;
 }
 
 interface Props {
@@ -33,7 +39,6 @@ interface Props {
   onTyping?: () => void;
 }
 
-const BAR_BG = "#1f2a37"; // dark input bar
 const MAX_RENDERED_ENTRIES = 300; // keep long sessions snappy; older ones fall off
 const PREVIEW_LINES = 10;
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
@@ -73,8 +78,12 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) 
     }
   }, [maxOffset, stick]);
 
+  // Several wheel steps can arrive before the next render: count from the latest position.
+  const position = useRef(top);
+  position.current = top;
   const scrollBy = (delta: number) => {
-    const next = Math.max(0, top + delta);
+    const next = Math.max(0, position.current + delta);
+    position.current = Math.min(next, maxOffset);
     if (next >= maxOffset) {
       setStick(true);
       setOffset(0);
@@ -83,6 +92,25 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) 
       setOffset(next);
     }
   };
+
+  // The mouse wheel scrolls the conversation only. Ink drops mouse reports before useInput, so
+  // read them from the raw input: a "data" listener sees each chunk as Ink reads it.
+  const {stdin} = useStdin();
+  const wheel = useRef(scrollBy);
+  wheel.current = scrollBy;
+  useEffect(() => {
+    if (!stdin) return;
+    const onData = (chunk: Buffer | string) => {
+      for (const m of String(chunk).matchAll(MOUSE_REPORT)) {
+        const button = Number(m[1]);
+        if (button & 64) wheel.current(button & 1 ? 3 : -3);
+      }
+    };
+    stdin.on("data", onData);
+    return () => {
+      stdin.off("data", onData);
+    };
+  }, [stdin]);
 
   useInput((_input, key) => {
     const page = Math.max(1, viewH - 2);
@@ -152,7 +180,7 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping}: Props) 
             ? "y allow · n deny · a always this session · esc deny"
             : busy
               ? "esc interrupt · type ahead to queue · PgUp/PgDn or ⇧↑/⇧↓ scroll"
-              : "enter send · / commands · shift+tab mode · PgUp/PgDn scroll · /help"}
+              : "enter send · / commands · shift+tab mode · scroll: wheel or PgUp/PgDn · /help"}
         </Text>
       </Box>
     </Box>
@@ -600,10 +628,13 @@ function InputBox({
   return (
     <Box flexDirection="column" flexGrow={1}>
     <Box
-      backgroundColor={BAR_BG}
+      borderStyle="round"
+      borderColor={confirm ? "yellow" : ACCENT}
+      borderDimColor={!confirm}
       paddingX={1}
       flexDirection="column"
-      maxHeight={6}
+      minHeight={4}
+      maxHeight={10}
       overflowY="hidden"
     >
       {store.trust ? (
@@ -618,7 +649,13 @@ function InputBox({
       ) : (
         <Text>
           <Text color={ACCENT}>❯ </Text>
-          {lines.map((line, i) => (
+          {lines.length === 1 && lines[0] === "" ? (
+            <>
+              <Text inverse> </Text>
+              <Text dimColor> Ask ngobe anything · / for commands · drop a file path to read it</Text>
+            </>
+          ) : null}
+          {(lines.length === 1 && lines[0] === "" ? [] : lines).map((line, i) => (
             <Text key={i}>
               {i > 0 ? "\n" : ""}
               {i === cursorLine ? (

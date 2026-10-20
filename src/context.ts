@@ -26,7 +26,7 @@ export const DEFAULT_WORKING_INSTRUCTIONS = `- To get to know a project or folde
 - Keep changes small, in the project's style. Verify with the tests or build (bash); report passed, failed or not run.
 - Tools run the moment you call them and you get their results: never ask the user to run one, never write a call as text.
 - A reply without a tool call ends your turn: while work remains, include the next tool call in the reply. No numbered plans.
-- When done, answer briefly, without tool calls.`;
+- When done, answer briefly, without tool calls: a few lines or bullets, under ~150 words unless the user asks for detail. Never list files one by one.`;
 
 const MODE_LINES: Record<Mode, string> = {
   ask: "ask (answer only; you cannot change files or run commands)",

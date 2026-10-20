@@ -1,6 +1,6 @@
 import type { Mode } from "./config.js";
 import { isSecretPath } from "./tools/util.js";
-import type { Args, Need, Tool } from "./types.js";
+import type { Args, Need, NeedContext, Tool } from "./types.js";
 import { printable, type Ui } from "./ui.js";
 
 // Read-only commands that may run without asking, provided every word passes isPlainWord.
@@ -107,12 +107,14 @@ export function commandPrefix(command: string): string {
   return command.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
-export function needOf(tool: Tool, args: Args): Need {
-  return tool.needs?.(args) ?? (tool.risk === "write" || tool.risk === "exec" ? "approval" : "none");
+export function needOf(tool: Tool, args: Args, ctx?: NeedContext): Need {
+  return tool.needs?.(args, ctx) ?? (tool.risk === "write" || tool.risk === "exec" ? "approval" : "none");
 }
 
 export class Permissions {
   private always = new Set<string>();
+  /** The folder and the request being worked on (set by the agent at the start of each run). */
+  private context: NeedContext = { cwd: process.cwd() };
   /** Command prefixes approved with "always" (bash only, never dangerous commands). */
   private prefixes = new Set<string>();
 
@@ -123,6 +125,15 @@ export class Permissions {
 
   setMode(mode: Mode): void {
     this.mode = mode;
+  }
+
+  setRequest(cwd: string, request: string): void {
+    this.context = { cwd, request };
+  }
+
+  /** What a call needs, given the current folder and request. */
+  need(tool: Tool, args: Args): Need {
+    return needOf(tool, args, this.context);
   }
 
   /** What "always" has approved this session (/permissions). */
@@ -138,7 +149,7 @@ export class Permissions {
   /** Whether a call may run; prompts the user when it needs approval. */
   async check(tool: Tool, args: Args): Promise<boolean> {
     if (!toolsForMode([tool], this.mode).length) return false;
-    const need = needOf(tool, args);
+    const need = needOf(tool, args, this.context);
     if (need === "none") return true;
     if (need === "approval" && (this.mode === "auto" || this.always.has(tool.name))) return true;
     const command = tool.name === "bash" ? String(args.command ?? "").trim() : "";

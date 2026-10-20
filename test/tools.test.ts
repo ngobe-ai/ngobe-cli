@@ -137,9 +137,9 @@ describe("read_file", () => {
     expect(out).toContain("offset=15");
   });
 
-  test("refuses binary files and directories with a clear message", async () => {
+  test("describes binary files instead of refusing them; directories get a clear message", async () => {
     await fs.writeFile(path.join(dir, "project/img.bin"), Buffer.from([0, 1, 2, 0, 255]));
-    await expect(readFile.run({ path: "img.bin" }, ctx())).rejects.toThrow(/binary/i);
+    expect(await readFile.run({ path: "img.bin" }, ctx())).toMatch(/^\[binary data/);
     await expect(readFile.run({ path: "src" }, ctx())).rejects.toThrow(/director/i);
   });
 });

@@ -27,21 +27,22 @@ const require = createRequire(import.meta.url);
 
 /**
  * Open (or create) a SQLite database with whichever driver the runtime ships: bun:sqlite
- * under Bun, node:sqlite under Node 22.13+. No native dependency to install.
+ * under Bun, node:sqlite under Node 22.13+. No native dependency to install. readOnly opens an
+ * existing file without creating or changing anything (a user's database read by read_file).
  */
-export function openDb(file: string): Db {
+export function openDb(file: string, opts: { readOnly?: boolean } = {}): Db {
   let raw: RawDb;
   if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") {
     const { Database } = require("bun:sqlite") as { Database: new (f: string, o?: object) => RawDb };
-    raw = new Database(file, { create: true });
+    raw = new Database(file, opts.readOnly ? { readonly: true } : { create: true });
   } else {
     // node:sqlite prints an ExperimentalWarning on load in Node 22; it is stable enough for this.
     const emit = process.emitWarning;
     process.emitWarning = ((w: string | Error, ...rest: unknown[]) =>
       String(typeof w === "string" ? w : w.message).includes("SQLite") ? undefined : (emit as (...a: unknown[]) => void).call(process, w, ...rest)) as typeof process.emitWarning;
     try {
-      const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (f: string) => RawDb };
-      raw = new DatabaseSync(file);
+      const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (f: string, o?: object) => RawDb };
+      raw = new DatabaseSync(file, opts.readOnly ? { readOnly: true } : undefined);
     } finally {
       process.emitWarning = emit;
     }

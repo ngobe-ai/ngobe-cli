@@ -7,6 +7,9 @@ import type {Activity, RunSummary, Ui} from "../ui.js";
 
 export type {TuiConfig};
 
+const MOUSE_ON = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_OFF = "\x1b[?1000l\x1b[?1006l";
+
 /** Chat-screen terminal UI (ink). Implements the Ui interface the agent talks to. */
 export class Tui implements Ui {
   private store: Store;
@@ -19,6 +22,13 @@ export class Tui implements Ui {
   constructor(config: TuiConfig) {
     this.store = new Store(config.mode);
     this.store.model = config.model;
+    // Like full-screen terminal apps: the alternate screen has no scrollback for frames to pile up
+    // in, and the wheel is reported to us (SGR mode) so only the conversation scrolls. Text
+    // selection then needs Option (macOS) or Shift held; NGOBE_MOUSE=0 leaves the mouse alone.
+    if (config.mouse !== false) {
+      process.stdout.write(MOUSE_ON);
+      process.once("exit", () => process.stdout.write(MOUSE_OFF));
+    }
     this.instance = render(
       <App
         store={this.store}
@@ -35,7 +45,7 @@ export class Tui implements Ui {
           this.typing();
         }}
       />,
-      {exitOnCtrlC: false}, // Ctrl+C is routed through onInterrupt instead
+      {exitOnCtrlC: false, alternateScreen: true}, // Ctrl+C is routed through onInterrupt instead
     );
   }
 
@@ -97,5 +107,6 @@ export class Tui implements Ui {
     this.store.endTurn();
     this.store.requestExit();
     await this.instance.waitUntilExit();
+    process.stdout.write(MOUSE_OFF);
   }
 }

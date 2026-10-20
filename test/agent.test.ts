@@ -453,6 +453,23 @@ describe("agent loop", () => {
     expect(search.calls).toEqual([]);
   });
 
+  test("files the request names are read before the model's first turn", async () => {
+    const read = counter("read_file");
+    read.tool.parameters = { type: "object", properties: { path: { type: "string" }, limit: { type: "integer" } }, required: ["path"] };
+    const { agent, model, config } = setup([{ content: "420 USD" }], [read.tool]);
+    const downloads = tmpDir();
+    fs.writeFileSync(path.join(downloads, "My Invoice.pdf"), "%PDF");
+    fs.mkdirSync(path.join(config.cwd, "src"));
+    fs.writeFileSync(path.join(config.cwd, "src", "sum.js"), "x");
+    // Seen live: "I don't have access to the file", with no tool call.
+    await agent.run(`How much is due on ${path.join(downloads, "My\\ Invoice.pdf")} and in src/sum.js? Also create src/new.ts`, new AbortController().signal);
+    expect(read.calls).toEqual([
+      { path: path.join(downloads, "My Invoice.pdf"), limit: 150 },
+      { path: "src/sum.js", limit: 150 },
+    ]);
+    expect((model.requests[0].messages as Message[]).filter((m) => m.role === "tool")).toHaveLength(2);
+  });
+
   test("other requests don't get an overview", async () => {
     const { tool, calls } = counter("project_overview");
     const { agent } = setup([{ content: "done" }, { content: "done" }], [tool]);

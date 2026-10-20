@@ -62,7 +62,15 @@ To use the server's models from your laptop, let Ngobe tunnel over SSH (configur
 
       docker model configure --keep-alive -1 ngobe/<name>:16k   # -1 = never unload
 
-  The runner forgets this setting when it restarts (reboot, Docker restart), so re-apply it from a systemd timer: check `docker model configure show` for `"keep_alive": "-1"`, and if it's missing, run the line above. Without it, `NGOBE_KEEP_WARM_MINUTES` keeps the model loaded only while a chat is open.
+  The runner forgets this setting when it restarts (reboot, Docker restart), so re-apply it from a systemd timer: check `docker model configure show` for `"keep_alive": "-1"`, and if it's missing, run `docker model unload --all` and then the line above. Never configure a model that is loaded: Docker Model Runner starts a second copy beside it (measured: two 7B models left 533 MB of an 11.7 GiB server free).
+- Images: a small vision model lets a text-only coding model work with screenshots and diagrams. Measured on the same VPS with Qwen3-VL 2B (`docker model pull ai/qwen3-vl:2B-UD-Q4_K_XL`, 1 GB): a 900×260 error screenshot was described and its text transcribed in 31 s cold (model load included), 7 s warm, using about 2.1 GiB while loaded. Its default context is 262,144 tokens, which would need tens of GiB, so package a small-context variant and remove the original tag so nobody loads it by mistake:
+
+      docker model package --from ai/qwen3-vl:2B-UD-Q4_K_XL --context-size 6144 ngobe/qwen3-vl-2b:6k
+      docker model rm ai/qwen3-vl:2B-UD-Q4_K_XL   # the variant keeps the weights
+      # NGOBE_VISION_MODEL=docker.io/ngobe/qwen3-vl-2b:6k
+
+  It loads on first use and unloads after 5 idle minutes; one image is ~250–1,500 tokens of context.
+- Speculative decoding (`docker model configure --speculative-draft-model`, a 0.5B draft for the 7B) gave no gain on a 6-vCPU CPU server shared with other services: 3.6–4.4 tok/s with it, 3.8–6.0 without, for 300-token replies. The draft competes with the main model for the same cores. Measure before keeping it. Without it, `NGOBE_KEEP_WARM_MINUTES` keeps the model loaded only while a chat is open.
 - Size the history to the model's context window (`NGOBE_MAX_CONTEXT_CHARS`, see configuration.md). On CPU, prompt processing time grows with context; smaller windows answer sooner.
 - Raise `NGOBE_REQUEST_TIMEOUT` if `doctor` shows long first-token times.
 
