@@ -331,6 +331,49 @@ describe("agent loop", () => {
     expect((model.requests[1].messages as Message[])[0].content).toBe("mode edit");
   });
 
+  test("the session context follows the system prompt; a mode change is told in the next message", async () => {
+    const model = fakeModel([{ content: "first" }, { content: "second" }]);
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "edit" });
+    const { ui } = recordingUi();
+    const agent = new Agent({ config, llm: new LLM(config), tools: [], ui, perms: new RealPermissions(ui, "edit"), systemPrompt: "sys", sessionContext: (m) => `cwd /p · mode: ${m}`, memory: null });
+    await agent.run("one", new AbortController().signal);
+    agent.setMode("auto");
+    await agent.run("two", new AbortController().signal);
+    const [first, second] = model.requests.map((r) => r.messages as Message[]);
+    expect(first.slice(0, 3)).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: expect.stringContaining("cwd /p · mode: edit") },
+      { role: "assistant", content: "Understood." },
+    ]);
+    // Everything already sent is sent again unchanged, so llama.cpp only reads what is new.
+    expect(second.slice(0, first.length)).toEqual(first);
+    const last = second[second.length - 1];
+    expect(last.role).toBe("user");
+    expect(last.content).toContain("two");
+    expect(last.content).toContain("Mode is now auto");
+  });
+
+  test("a mode change during a run is told with the next tool result", async () => {
+    const { tool } = counter("approve");
+    tool.run = async (_a, ctx) => {
+      ctx.setMode!("edit");
+      return "approved";
+    };
+    const model = fakeModel([{ toolCalls: [{ name: "approve", arguments: "{}" }] }, { content: "ok" }]);
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "plan" });
+    const { ui } = recordingUi("y");
+    const agent = new Agent({ config, llm: new LLM(config), tools: [tool], ui, perms: new RealPermissions(ui, "plan"), systemPrompt: "sys", sessionContext: (m) => `mode: ${m}`, memory: null });
+    await agent.run("plan it", new AbortController().signal);
+    const [first, second] = model.requests.map((r) => r.messages as Message[]);
+    expect(second.slice(0, first.length)).toEqual(first);
+    const result = second[second.length - 1];
+    expect(result.role).toBe("tool");
+    expect(result.content).toContain("approved");
+    expect(result.content).toContain("Mode is now edit");
+  });
+
   test("records outcomes, failures and a working test command in memory", async () => {
     const { tool } = counter("bash", "exec", async () => "exit code 0\n2 passed\n");
     const { agent, memory, config } = setup([{ toolCalls: [{ name: "bash", arguments: '{"command": "npm test"}' }] }, { content: "tests pass" }], [tool], { memory: true });

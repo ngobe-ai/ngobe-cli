@@ -31,7 +31,7 @@ Ngobe is one Node.js/Bun process with no background services. Everything below r
 - Abandons a request after `NGOBE_REQUEST_TIMEOUT` seconds without a streamed chunk (an idle timeout, so long CPU generations are not cut off).
 - Tool calling: native by default. If the endpoint rejects the `tools` parameter (llama.cpp without `--jinja`, models without tool templates), it switches to a text protocol: tools are described in the system prompt and the model writes `<tool_call>` blocks. Both the JSON form and Qwen3-Coder's XML form are parsed; tool-call markup is hidden from the streamed text. Parsed calls go through exactly the same validation as native ones, and a malformed block is reported back, never executed.
 - Models without a tool template (Qwen2.5-Coder) write calls as JSON in prose: in a code fence of any language, in `<function>` tags, or on a line of their own. Those are accepted when the name is a tool on offer; the text from the call on (often made-up results) is dropped, and fences are held back while streaming so the JSON never reaches the screen.
-- The system prompt and tool list are byte-identical between requests (the freshness hint rides on the user message), so llama.cpp reuses its cache of them instead of re-reading thousands of tokens. The chat warms that cache up (`warm()`: the same request, one token) when it opens and when you start typing after a break.
+- The system prompt and tool list are byte-identical between requests, sessions and folders, so llama.cpp reuses its cache of them instead of re-reading thousands of tokens. Everything particular to a session (folder, project, commands, date, starting mode, notes, AGENTS.md) comes after them, once, as a user message answered "Understood." (`buildSessionContext`). A later mode change is appended to the next message not yet sent (`modeNote`), and the freshness hint rides on the user message, so what was already sent never changes. The chat warms the cache up (`warm()`: the same request, one token) when it opens and when you start typing after a break.
 - Small-model habits handled in the loop: a command handed to the user in a shell block ("run this and paste the output") becomes a `bash` call, with the usual permission check; a short reply that only announces an action ("Checking the tests.", "… Let's locate the code and fix it.") gets up to two nudges per stall to make the call instead of ending the run; "let's run the tests again" runs the test command used before (or the project's); and a request for a change that ends with nothing changed gets one nudge to make the change rather than show it.
 - Falls back to `NGOBE_FALLBACK_MODEL` once when the main model is missing, unreachable or silent.
 - Token usage comes from the server when it reports it, otherwise ~4 characters/token estimates (marked as estimated).
@@ -111,4 +111,12 @@ Fixed prompt overhead per request (system prompt + tool definitions), counted by
 | lean (default) | 10 | 1,370 | 68 s |
 | full | 25 | 4,097 | 240 s |
 
-The prefix is byte-identical across requests, so llama.cpp's prompt cache reuses it and later turns only process what's new. Model latency dominates on CPU; measure it on the target with `ngobe doctor` and `ngobe benchmark`.
+The prefix is byte-identical across requests, so llama.cpp's prompt cache reuses it and later turns only process what's new. Opening the chat, measured on the same VPS with the model kept loaded (startup warm-up, 2026-10-20):
+
+| | ready after |
+|---|---|
+| first session after the model loads | 68.5 s |
+| another folder | 3.2 s |
+| back to the first folder | 5.1 s |
+
+Before the session context moved out of the system prompt, every new folder, day or mode cost the full ~68 s. Model latency dominates on CPU; measure it on the target with `ngobe doctor` and `ngobe benchmark`.

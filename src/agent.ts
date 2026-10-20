@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Config, Mode } from "./config.js";
-import { FRESHNESS_HINT, historySize, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
+import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
@@ -16,8 +16,16 @@ interface AgentDeps {
   tools: Tool[];
   ui: Ui;
   perms: Permissions;
-  /** A function of the mode, so an approved plan (exit_plan_mode) gets a matching prompt. */
+  /**
+   * Best the same for every request: llama.cpp re-reads everything after the first difference.
+   * (A function of the mode is accepted; sub-agents extend the prompt this way.)
+   */
   systemPrompt: string | ((mode: Mode) => string);
+  /**
+   * The folder, project and starting mode, sent once after the system prompt and tools. It is fixed
+   * when first used; a later mode change is told in the next message instead.
+   */
+  sessionContext?: string | ((mode: Mode) => string);
   memory?: Memory | null;
   log?: AuditLog;
   /** Recorded with each run: the CLI command and the active prompt variant. */
@@ -145,6 +153,9 @@ export class Agent {
   private messages: Message[] = [];
   /** Model-written summary of turns dropped from the history. */
   private summary = "";
+  /** The session context, fixed when first sent (null until then), and the last mode the model was told. */
+  private opening: string | null = null;
+  private toldMode: Mode;
   private files: FileTracker = new Map();
   private searchResults = new Set<string>();
   private todoList: Todo[] = [];
@@ -163,6 +174,7 @@ export class Agent {
 
   constructor(private d: AgentDeps) {
     this.mode = d.config.mode;
+    this.toldMode = this.mode;
   }
 
   reset() {
@@ -210,7 +222,27 @@ export class Agent {
           { role: "assistant", content: "Understood." },
         ]
       : [];
-    return [{ role: "system", content: this.systemFor(this.mode) }, ...earlier, ...this.messages];
+    const context = this.sessionContext();
+    const opening: Message[] = context ? [{ role: "user", content: context }, { role: "assistant", content: "Understood." }] : [];
+    return [{ role: "system", content: this.systemFor(this.mode) }, ...opening, ...earlier, ...this.messages];
+  }
+
+  private sessionContext(): string {
+    if (this.opening === null) {
+      const c = this.d.sessionContext;
+      this.opening = typeof c === "function" ? c(this.mode) : (c ?? "");
+      this.toldMode = this.mode;
+    }
+    return this.opening;
+  }
+
+  /** Tell the model about a mode change in the newest message, which hasn't been sent yet. */
+  private tellMode(): void {
+    this.sessionContext(); // it states the mode the session started in
+    const last = this.messages[this.messages.length - 1];
+    if (this.mode === this.toldMode || !last || (last.role !== "user" && last.role !== "tool") || typeof last.content !== "string") return;
+    last.content = `${last.content}\n\n${modeNote(this.mode)}`;
+    this.toldMode = this.mode;
   }
 
   /** Milliseconds since the model last worked for this session (Infinity if never). */
@@ -240,7 +272,7 @@ export class Agent {
   contextUsage(): ContextUsage {
     const offered = toolsForMode(this.d.tools, this.mode);
     return {
-      system: this.systemFor(this.mode).length,
+      system: this.systemFor(this.mode).length + this.sessionContext().length,
       tools: JSON.stringify(offered.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length,
       history: historySize(this.messages),
       summary: this.summary.length,
@@ -296,6 +328,7 @@ export class Agent {
         // A warm-up still running means a cold start: this request waits behind it.
         this.show(this.warming ? LOADING : "Thinking");
         await this.compact(signal);
+        this.tellMode();
         const offered = toolsForMode(this.d.tools, this.mode);
         const byName = new Map(offered.map((t) => [t.name, t]));
 

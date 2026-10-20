@@ -58,6 +58,11 @@ To use the server's models from your laptop, let Ngobe tunnel over SSH (configur
   | RAM (anonymous) | 4.8 GiB | 4.4 GiB |
 
   To try another quantization, download the one `.gguf` and use `docker model package --gguf <file> --context-size 16384 …`: pulling `hf.co/<repo>:Q4_0` matches every file whose name contains Q4_0 (Q4_0_4_4, Q4_0_8_8 …) and downloads them all.
+- Keep the model loaded if the machine can spare its RAM (the 7B at 16k holds about 4.3 GiB). Docker Model Runner unloads it after 5 idle minutes, and reloading it plus re-reading Ngobe's instructions takes 1–2 minutes on a CPU:
+
+      docker model configure --keep-alive -1 ngobe/<name>:16k   # -1 = never unload
+
+  The runner forgets this setting when it restarts (reboot, Docker restart), so re-apply it from a systemd timer: check `docker model configure show` for `"keep_alive": "-1"`, and if it's missing, run the line above. Without it, `NGOBE_KEEP_WARM_MINUTES` keeps the model loaded only while a chat is open.
 - Size the history to the model's context window (`NGOBE_MAX_CONTEXT_CHARS`, see configuration.md). On CPU, prompt processing time grows with context; smaller windows answer sooner.
 - Raise `NGOBE_REQUEST_TIMEOUT` if `doctor` shows long first-token times.
 
