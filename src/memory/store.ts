@@ -5,7 +5,8 @@ import { containsSecret, redact } from "../log.js";
 import { clusterFailures, signature, type Cluster, type FailureRow } from "./cluster.js";
 import { openDb, type Db } from "./db.js";
 
-export type FactKind = "command" | "convention" | "version" | "source" | "note";
+/** "lesson": how a tool call that failed was fixed, learned from runs; global (project "*"). */
+export type FactKind = "command" | "convention" | "version" | "source" | "note" | "lesson";
 
 export interface Fact {
   id: number;

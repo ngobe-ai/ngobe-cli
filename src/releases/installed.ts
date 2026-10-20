@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { childEnv } from "../childEnv.js";
 import { resolveTarget } from "./versions.js";
 
 export interface Installed {
@@ -59,13 +61,13 @@ export async function installedVersions(name: string, cwd: string, ecosystem?: s
   if (!eco || eco === "npm") checks.push(fromNodeModules(cwd, pkg));
   if (!eco || eco === "pub") checks.push(fromPubspecLock(cwd, pkg));
   if (!eco || eco === "packagist") checks.push(fromComposerLock(cwd, pkg));
-  if (eco === "pypi") checks.push(fromPip(cwd, pkg));
+  if (eco === "pypi") checks.push(fromPip(pkg));
   return (await Promise.all(checks)).filter((x): x is Installed => x !== null);
 }
 
 function fromCli(cli: { bin: string; args: string[]; pattern: RegExp }, cwd: string): Promise<Installed | null> {
   return new Promise((resolve) => {
-    execFile(cli.bin, cli.args, { cwd, timeout: 30_000 }, (err, stdout, stderr) => {
+    execFile(cli.bin, cli.args, { cwd, timeout: 30_000, env: childEnv() }, (err, stdout, stderr) => {
       const m = cli.pattern.exec(`${stdout}\n${stderr}`);
       resolve(!err && m ? { version: m[1], source: `${cli.bin} ${cli.args.join(" ")}` } : null);
     });
@@ -131,13 +133,20 @@ async function fromComposerLock(cwd: string, pkg: string): Promise<Installed | n
   return hit ? { version: hit.version.replace(/^v/, ""), source: "composer.lock" } : null;
 }
 
-function fromPip(cwd: string, pkg: string): Promise<Installed | null> {
-  return new Promise((resolve) => {
-    execFile("python3", ["-m", "pip", "show", pkg], { cwd, timeout: 30_000 }, (err, stdout) => {
-      const m = /^Version: (\S+)/m.exec(stdout);
-      resolve(!err && m ? { version: m[1], source: "python3 -m pip show" } : null);
+async function fromPip(pkg: string): Promise<Installed | null> {
+  // `python3 -m` looks in the working directory first, so a project could ship its own pip/:
+  // run it from a new empty directory (-I would also hide `pip install --user` packages).
+  const empty = await fs.mkdtemp(path.join(os.tmpdir(), "ngobe-pip-"));
+  try {
+    return await new Promise<Installed | null>((resolve) => {
+      execFile("python3", ["-m", "pip", "show", pkg], { cwd: empty, timeout: 30_000, env: childEnv() }, (err, stdout) => {
+        const m = /^Version: (\S+)/m.exec(stdout);
+        resolve(!err && m ? { version: m[1], source: "python3 -m pip show" } : null);
+      });
     });
-  });
+  } finally {
+    await fs.rm(empty, { recursive: true, force: true });
+  }
 }
 
 function escape(s: string): string {

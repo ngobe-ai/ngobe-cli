@@ -51,6 +51,8 @@ export interface Config {
   braveApiKey: string;
   tavilyApiKey: string;
   searxngURL: string;
+  /** Sent as a bearer token to a SearXNG behind an authenticating gateway. Environment only. */
+  searxngKey: string;
   githubToken: string;
   /** Extra official documentation domains per technology, merged over the built-in list. */
   docs: Record<string, string[]>;
@@ -130,7 +132,7 @@ Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
   NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
-  BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, GITHUB_TOKEN, NGOBE_DEBUG
+  BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, NGOBE_SEARXNG_KEY, GITHUB_TOKEN, NGOBE_DEBUG
 Config file: $XDG_CONFIG_HOME/ngobe/config.json (default ~/.config/ngobe/config.json).
 Secrets (API keys, tokens) are read from the environment only.`;
 
@@ -191,7 +193,7 @@ export function configFilePath(env: Env = process.env): string {
   return path.join(base, "ngobe", "config.json");
 }
 
-const SECRET_KEYS = ["apiKey", "braveApiKey", "tavilyApiKey", "githubToken"];
+const SECRET_KEYS = ["apiKey", "braveApiKey", "tavilyApiKey", "searxngKey", "githubToken"];
 
 /** The user-level config file. A project directory can't supply one: a cloned repo must not redirect the model endpoint. */
 function readConfigFile(file: string): { values: Record<string, unknown>; warnings: string[] } {
@@ -282,6 +284,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
   const braveApiKey = envVar(env, "BRAVE_API_KEY") ?? env.BRAVE_API_KEY ?? "";
   const tavilyApiKey = envVar(env, "TAVILY_API_KEY") ?? env.TAVILY_API_KEY ?? "";
   const searxngURL = String(envVar(env, "SEARXNG_URL") ?? file.searxngURL ?? "");
+  const searxngKey = envVar(env, "SEARXNG_KEY") ?? "";
 
   const config: Config = {
     baseURL: String(setting("BASE_URL", "baseURL", values["base-url"]).raw ?? "http://localhost:11434/v1"),
@@ -314,6 +317,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     braveApiKey,
     tavilyApiKey,
     searxngURL,
+    searxngKey,
     githubToken: env.GITHUB_TOKEN ?? env.GH_TOKEN ?? "",
     docs: (file.docs as Record<string, string[]>) ?? {},
     debug: bool(values.debug ?? envVar(env, "DEBUG") ?? file.debug, false),

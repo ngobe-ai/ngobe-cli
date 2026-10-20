@@ -98,16 +98,24 @@ const KNOWN: Record<string, { ecosystem: Ecosystem; pkg?: string }> = {
   fastapi: { ecosystem: "pypi", pkg: "fastapi" },
 };
 
+/** Package registries; the other ecosystems are official SDK and language release sources. */
+const REGISTRIES = new Set<Ecosystem>(["npm", "pypi", "pub", "packagist", "crates", "github"]);
+/** Where names have two parts: owner/repo, vendor/name. */
+const NAMESPACED = new Set<Ecosystem>(["github", "packagist"]);
+
 /** Work out which registry or release source a name refers to. */
 export function resolveTarget(name: string, ecosystem?: string): { ecosystem: Ecosystem; pkg: string } {
   const n = name.trim();
+  const known = KNOWN[n.toLowerCase()];
   if (ecosystem) {
     const e = (ECOSYSTEM_ALIASES[ecosystem.toLowerCase()] ?? ecosystem.toLowerCase()) as Ecosystem;
     if (!ECOSYSTEMS.includes(e)) throw new Error(`unknown ecosystem "${ecosystem}". Use one of: ${ECOSYSTEMS.join(", ")}`);
-    const known = KNOWN[n.toLowerCase()];
+    // Small models add an ecosystem that can't hold the name ({"name": "flutter", "ecosystem": "github"}):
+    // an SDK or language keeps its official source, and a bare name is no owner/repo or vendor/name.
+    const misplaced = known && known.ecosystem !== e && (!REGISTRIES.has(known.ecosystem) || (NAMESPACED.has(e) && !n.includes("/")));
+    if (known && misplaced) return { ecosystem: known.ecosystem, pkg: known.pkg ?? n.toLowerCase() };
     return { ecosystem: e, pkg: known?.ecosystem === e && known.pkg ? known.pkg : n };
   }
-  const known = KNOWN[n.toLowerCase()];
   if (known) return { ecosystem: known.ecosystem, pkg: known.pkg ?? n.toLowerCase() };
   if (n.startsWith("@")) return { ecosystem: "npm", pkg: n };
   throw new Error(

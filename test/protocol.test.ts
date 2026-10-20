@@ -170,6 +170,28 @@ describe("tool calls a small model writes in prose", () => {
     expect(content).toBe("Let me read it.");
   });
 
+  test("a command the reply says it will run with bash is run", () => {
+    // Seen live: the model said this twice and stopped both times.
+    const reply = "To confirm the version of Flutter installed on your machine, I'll use the bash tool to run the `flutter --version` command.";
+    expect(parseTextToolCalls(reply, known)).toEqual({ content: reply, calls: [{ name: "bash", arguments: '{"command":"flutter --version"}' }] });
+    const named = "Let me run `npm test` to see what fails.";
+    expect(parseTextToolCalls(named, known).calls).toEqual([{ name: "bash", arguments: '{"command":"npm test"}' }]);
+    const toolInTicks = "I'll use the `bash` tool to run `ls -la`.";
+    expect(parseTextToolCalls(toolInTicks, known).calls).toEqual([{ name: "bash", arguments: '{"command":"ls -la"}' }]);
+  });
+
+  test("commands suggested to the user, already run, or meant for another tool stay text", () => {
+    for (const text of [
+      "You can run `flutter upgrade` to update, or `flutter doctor` to check your setup.",
+      "I ran `flutter --version`: 3.47.7 is installed.",
+      "Let me know if you want me to run `npm test`.",
+      "I'll use read_file to read `src/a.ts` next.",
+      "I'll run `npm test` and `npm run build`.",
+    ]) {
+      expect(parseTextToolCalls(text, known)).toEqual({ content: text, calls: [] });
+    }
+  });
+
   test("a JSON object under a label that isn't a tool stays text", () => {
     const json = 'The payload:\n```json\n{"command": "ls"}\n```';
     expect(parseTextToolCalls(json, known)).toEqual({ content: json, calls: [] });

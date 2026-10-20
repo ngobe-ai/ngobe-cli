@@ -86,7 +86,28 @@ function parseLoose(text: string, known: string[]): { content: string; calls: Te
   if (calls.length) return { content: text.slice(0, first).trim(), calls };
   const handoff = known.includes("bash") ? shellHandoff(text) : null;
   if (handoff) return { content: handoff.before, calls: [{ name: "bash", arguments: JSON.stringify({ command: handoff.command }) }] };
+  const said = known.includes("bash") ? proseCommand(text, known) : null;
+  if (said) return { content: text, calls: [{ name: "bash", arguments: JSON.stringify({ command: said }) }] };
   return { content: text, calls: [] };
+}
+
+const RUN_INTENT = /\b(?:i(?:'ll| will|'m going to| am going to)|let(?:'s| me))\s+(?:now\s+|first\s+|then\s+)?(?:use|run|execute|call)\b/i;
+const SHELL_WORDS = /\b(?:bash|shell|terminal|command)\b|\b(?:run|execute)\s+`/i;
+
+/**
+ * "To confirm the version, I'll use the bash tool to run the `flutter --version` command." and the
+ * reply ends: the command the model says it will run, if one sentence says so with exactly one
+ * command in backticks. Suggestions to the user ("you can run …"), past tense ("I ran …") and
+ * sentences about another tool are left alone; the call still goes through the permission check.
+ */
+export function proseCommand(text: string, known: string[]): string | null {
+  for (const sentence of text.split(/(?<=[.!:])\s+/)) {
+    if (!RUN_INTENT.test(sentence) || !SHELL_WORDS.test(sentence)) continue;
+    if (known.some((t) => t !== "bash" && new RegExp(String.raw`\b${t}\b`).test(sentence))) continue;
+    const spans = [...sentence.matchAll(/`([^`\n]+)`/g)].map((m) => m[1].trim()).filter((s) => !known.includes(s));
+    if (spans.length === 1 && /^[\w./~-]/.test(spans[0]) && spans[0].length <= 200) return spans[0];
+  }
+  return null;
 }
 
 const SHELL_FENCE = /```(?:bash|sh|shell|zsh|console|terminal)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/;

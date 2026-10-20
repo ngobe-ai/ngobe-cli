@@ -119,6 +119,16 @@ describe("web search", () => {
     expect(r.failures.join()).toContain("BRAVE_API_KEY");
   });
 
+  test("sends NGOBE_SEARXNG_KEY to a SearXNG behind a gateway", async () => {
+    let auth: string | null = null;
+    const base = serve((req) => {
+      auth = req.headers.get("authorization");
+      return Response.json({ results: [{ title: "t", url: "https://a.example", content: "c" }] });
+    });
+    await webSearch(testConfig({ searchProviders: ["searxng"], searxngURL: base, searxngKey: "k1" }), "q");
+    expect(auth).toBe("Bearer k1");
+  });
+
   test("reports when every provider fails", async () => {
     const config = testConfig({ searchProviders: ["searxng"], searxngURL: "http://127.0.0.1:9" });
     await expect(webSearch(config, "x")).rejects.toThrow("Web search failed");

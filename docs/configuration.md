@@ -73,6 +73,7 @@ Context sizing: each request carries ~2,700 tokens of tool definitions and syste
 | `BRAVE_API_KEY` | (env only) | Brave Search API key |
 | `TAVILY_API_KEY` | (env only) | Tavily API key |
 | `NGOBE_SEARXNG_URL` | `searxngURL` | Your SearXNG instance (JSON output must be enabled in its settings) |
+| `NGOBE_SEARXNG_KEY` | (environment only) | Sent as `Authorization: Bearer …` when SearXNG sits behind an authenticating gateway (see deployment.md) |
 | `GITHUB_TOKEN` / `GH_TOKEN` | (env only) | Raises the GitHub API limit from 60 to 5,000 requests/hour (release lookups and notes) |
 | | `docs` | Extra official documentation domains per technology: `{"filament": ["filamentphp.com"]}` |
 

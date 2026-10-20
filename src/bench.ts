@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { childEnv } from "./childEnv.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -218,7 +219,7 @@ export async function evaluate(
       return { pass, detail: `${check.tool} ${called(run, check.tool) ? "called" : "not called"}; source link ${/https?:\/\//.test(answer) ? "given" : "missing"}` };
     }
     case "tests_pass": {
-      const code = await new Promise<number>((resolve) => execFile("bash", ["-c", check.command], { cwd, timeout: 120_000 }, (err) => resolve(err ? 1 : 0)));
+      const code = await new Promise<number>((resolve) => execFile("bash", ["-c", check.command], { cwd, timeout: 120_000, env: childEnv() }, (err) => resolve(err ? 1 : 0)));
       const changed = [...(protectedHashes ?? new Map())].filter(([f, h]) => hashFiles(cwd, [f]).get(f) !== h).map(([f]) => f);
       return { pass: code === 0 && changed.length === 0, detail: `${check.command} ${code === 0 ? "passed" : "failed"}${changed.length ? `; protected files edited: ${changed.join(", ")}` : ""}` };
     }

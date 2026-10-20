@@ -2,7 +2,7 @@ import type { FactKind } from "../memory/store.js";
 import type { Tool } from "../types.js";
 import { reqStr } from "./util.js";
 
-const TTL_DAYS: Record<FactKind, number> = { command: 90, convention: 180, version: 7, source: 90, note: 30 };
+const TTL_DAYS: Record<FactKind, number> = { command: 90, convention: 180, version: 7, source: 90, note: 30, lesson: 180 };
 
 export const remember: Tool = {
   name: "remember",

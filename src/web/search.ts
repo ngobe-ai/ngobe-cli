@@ -116,6 +116,7 @@ const PROVIDERS: Record<SearchProvider, (c: Config, q: string, n: number, o: Sea
       cacheDir: config.cacheDir,
       ttlMs: TTL,
       signal: opts.signal,
+      headers: config.searxngKey ? { authorization: `Bearer ${config.searxngKey}` } : undefined,
     });
     return (data.results ?? []).slice(0, count).map((r) => ({ title: clean(r.title), url: r.url, snippet: clean(r.content), published: r.publishedDate }));
   },

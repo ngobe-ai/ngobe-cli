@@ -28,7 +28,7 @@ An independent review of this branch (2026-10-19) reported 12 issues plus minor 
 
 - On the target VPS: resource use with the real model, latencies, and benchmark scores. Run `ngobe doctor` and `ngobe benchmark` there.
 - With a real Qwen model through Docker Model Runner: tool-call reliability and which tool mode it ends up in.
-- Brave and Tavily against their real APIs (no keys were available); SearXNG only against a local stand-in.
+- Brave and Tavily against their real APIs (no keys were available). SearXNG is checked live (2026-10-20: self-hosted behind the gateway, `ngobe doctor` ✓).
 
 ## Deferred
 

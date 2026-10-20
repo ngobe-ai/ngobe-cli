@@ -70,6 +70,12 @@ To use the server's models from your laptop, let Ngobe tunnel over SSH (configur
 
 Version, release-note and advisory lookups reach the official hosts directly (nodejs.org, storage.googleapis.com, pypi.org, registry.npmjs.org, repo.packagist.org, pub.dev, crates.io, api.github.com, api.osv.dev, php.net, go.dev, python.org, postgresql.org). Allow outbound HTTPS to them. For web search, set one provider: `BRAVE_API_KEY`, `TAVILY_API_KEY`, or a self-hosted SearXNG with `NGOBE_SEARXNG_URL`. Set `GITHUB_TOKEN` if many lookups hit GitHub's 60/hour limit.
 
+SearXNG on the same server, without an account anywhere (about 110 MB of RAM):
+
+- Run `searxng/searxng` (pin a dated tag) with `-p 127.0.0.1:8888:8080 --memory 512m -v /etc/searxng:/etc/searxng`. In `settings.yml`: `use_default_settings: true`, a random `server.secret_key`, `server.limiter: false` (the gateway authenticates and rate-limits), and `search.formats: [html, json]`.
+- From a datacenter IP some engines refuse or ask for a CAPTCHA. Measured from a VPS on 2026-10-20: Google CSE, Bing and Yahoo answered (three engines, about 0.5 s a query); DuckDuckGo, Brave, Google, Qwant, Wikipedia and Wikidata did not, and mwmbl timed out. Disable the ones that fail (`- { name: brave, disabled: true }`; don't remove them, other engines share their network settings) so searches don't wait for them.
+- Publish only `GET /search?format=json` through the gateway, behind the same API key as the model (an nginx `location = /search` that checks the key and strips the `Authorization` header). Then set `NGOBE_SEARXNG_URL=https://<gateway>` and `NGOBE_SEARXNG_KEY` to that key.
+
 ## 6. Running unattended
 
 - `ngobe ask|plan|review` never modify anything.

@@ -47,7 +47,7 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
   let notes: string[] = [];
   let failures: string[] = [];
   if (memory?.enabled) {
-    const facts = memory.recall(config.cwd, 12, ["command", "convention", "version", "note"]);
+    const facts = memory.recall(config.cwd, 12, ["lesson", "command", "convention", "version", "note"]);
     memory.markUsed(facts.map((f) => f.id));
     notes = facts.map((f) => `${f.kind} ${f.key}: ${f.value} (${f.source}, confidence ${f.confidence.toFixed(1)}, ${f.updated_at.slice(0, 10)})`);
     failures = memory

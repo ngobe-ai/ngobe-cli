@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { childEnv } from "../childEnv.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Args, Tool, ToolContext } from "../types.js";
@@ -131,7 +132,7 @@ function ripgrep(q: Query, ctx: ToolContext): Promise<string[] | null> {
   args.push("-e", q.pattern, "--", target);
 
   return new Promise((resolve) => {
-    const child = spawn("rg", args, { cwd: ctx.cwd, signal: ctx.signal, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn("rg", args, { cwd: ctx.cwd, signal: ctx.signal, env: childEnv(), stdio: ["ignore", "pipe", "ignore"] });
     const out: string[] = [];
     let buffer = "";
     child.stdout.on("data", (d: Buffer) => {

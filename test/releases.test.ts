@@ -45,6 +45,15 @@ describe("version arithmetic", () => {
     expect(() => resolveTarget("left-pad")).toThrow("Pass an ecosystem");
     expect(() => resolveTarget("x", "maven")).toThrow("unknown ecosystem");
   });
+
+  test("a well-known name keeps its official source when a model names an ecosystem that can't hold it", () => {
+    // Seen live: check_latest_version {"name": "flutter", "ecosystem": "github"}, four times in a day.
+    expect(resolveTarget("flutter", "github")).toEqual({ ecosystem: "flutter", pkg: "flutter" });
+    expect(resolveTarget("node", "npm")).toEqual({ ecosystem: "node", pkg: "node" });
+    expect(resolveTarget("laravel", "github")).toEqual({ ecosystem: "packagist", pkg: "laravel/framework" });
+    expect(resolveTarget("flutter/flutter", "github")).toEqual({ ecosystem: "github", pkg: "flutter/flutter" });
+    expect(resolveTarget("react", "pypi")).toEqual({ ecosystem: "pypi", pkg: "react" });
+  });
 });
 
 /** Serve canned official responses by URL prefix instead of hitting the network. */

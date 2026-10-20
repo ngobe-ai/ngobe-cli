@@ -145,13 +145,31 @@ describe("secrets stay out of tools, logs and memory", () => {
   test("bash children don't inherit ngobe's own credentials", async () => {
     process.env.BRAVE_API_KEY = "brave-secret-123";
     process.env.NGOBE_API_KEY = "sk-model-secret-123";
+    process.env.NGOBE_SEARXNG_KEY = "searxng-secret-123";
     try {
-      const out = await bash.run({ command: "echo b=$BRAVE_API_KEY n=$NGOBE_API_KEY" }, { cwd: tmpDir() });
+      const out = await bash.run({ command: "echo b=$BRAVE_API_KEY n=$NGOBE_API_KEY s=$NGOBE_SEARXNG_KEY" }, { cwd: tmpDir() });
       expect(out).not.toContain("secret-123");
     } finally {
       delete process.env.BRAVE_API_KEY;
       delete process.env.NGOBE_API_KEY;
+      delete process.env.NGOBE_SEARXNG_KEY;
     }
+  });
+
+  test("the installed-version check doesn't run a project's own pip, or hand it ngobe's keys", async () => {
+    // `python3 -m pip` looks in the current directory first: a repo could ship its own pip/.
+    const cwd = tmpDir();
+    const leak = path.join(cwd, "leaked.txt");
+    fs.mkdirSync(path.join(cwd, "pip"));
+    fs.writeFileSync(path.join(cwd, "pip", "__init__.py"), "");
+    fs.writeFileSync(path.join(cwd, "pip", "__main__.py"), `import os\nopen(${JSON.stringify(leak)}, "w").write(os.environ.get("NGOBE_API_KEY", "ran"))\n`);
+    process.env.NGOBE_API_KEY = "sk-model-secret-123";
+    try {
+      await installedVersions("requests", cwd, "pypi");
+    } finally {
+      delete process.env.NGOBE_API_KEY;
+    }
+    expect(fs.existsSync(leak)).toBe(false);
   });
 
   test("git_diff leaves out secret files", async () => {

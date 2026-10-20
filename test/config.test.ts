@@ -53,6 +53,17 @@ describe("config", () => {
     expect(() => loadConfig([], { ...env, NGOBE_SEARCH_PROVIDERS: "google" })).toThrow("NGOBE_SEARCH_PROVIDERS");
   });
 
+  test("the SearXNG key comes from the environment, never the config file", () => {
+    const { dir, env } = home();
+    expect(loadConfig([], { ...env, NGOBE_SEARXNG_KEY: "k" }).config.searxngKey).toBe("k");
+    fs.mkdirSync(path.join(dir, "cfg", "ngobe"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "cfg", "ngobe", "config.json"), JSON.stringify({ searxngURL: "https://s.example", searxngKey: "leaked" }));
+    const loaded = loadConfig([], env);
+    expect(loaded.config.searxngURL).toBe("https://s.example");
+    expect(loaded.config.searxngKey).toBe("");
+    expect(loaded.warnings.join()).toContain('"searxngKey" is ignored');
+  });
+
   test("a known command is split from its arguments; anything else is a prompt", () => {
     const { env } = home();
     expect(loadConfig(["version", "flutter"], env)).toMatchObject({ command: "version", args: ["flutter"] });

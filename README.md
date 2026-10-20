@@ -6,7 +6,7 @@ What it does beyond a plain chat loop:
 
 - **Checks current facts instead of guessing.** Latest versions come from official release metadata (Flutter, Dart, Node.js, Python, PHP, Go, PostgreSQL, npm, PyPI, pub.dev, Packagist, crates.io, GitHub), with the source URL and check time. Release notes, breaking changes, security advisories (OSV.dev) and installed versions are separate tools. Web search (Brave, Tavily or SearXNG) is optional.
 - **Edits code safely.** Every tool call is schema-validated; writes stay inside the project; shell commands are risk-classified; destructive, privileged, secret-touching and publishing actions always ask. Files changed behind the agent's back are not overwritten.
-- **Learns from measured outcomes.** A SQLite memory keeps working commands, conventions, run outcomes, tool reliability and recurring failures. Prompt changes are benchmarked before they can be promoted, and can be rolled back. No model weights are changed.
+- **Learns from measured outcomes.** A SQLite memory keeps working commands, conventions, run outcomes, tool reliability and recurring failures, and lessons: a failed tool call that a later call fixed is remembered and shown in every later session. Prompt changes are benchmarked before they can be promoted, and can be rolled back. No model weights are changed.
 
 ## Install
 

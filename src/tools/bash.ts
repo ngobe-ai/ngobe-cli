@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { childEnv } from "../childEnv.js";
 import { classifyCommand } from "../permissions.js";
 import type { Tool } from "../types.js";
 import { killGroup } from "./processes.js";
@@ -7,8 +8,6 @@ import { optInt, reqStr } from "./util.js";
 // Long output keeps its start and its end (test summaries and errors are usually last).
 const HEAD = 50_000;
 const TAIL = 50_000;
-// Ngobe's own credentials are not the commands' business (and `echo $X` would hand them to the model).
-const SCRUBBED_ENV = ["NGOBE_API_KEY", "MUGAMBA_API_KEY", "NGOBE_BRAVE_API_KEY", "NGOBE_TAVILY_API_KEY", "BRAVE_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"];
 
 /** What a command is doing, for the status line: tests, builds, installs… */
 export function commandActivity(command: string, description?: string): string {
@@ -22,12 +21,6 @@ export function commandActivity(command: string, description?: string): string {
   if (/^\s*git\b/.test(c)) return "Running git";
   return `Running ${command.trim().split(/\s+/).slice(0, 3).join(" ")}`;
 }
-
-const SPAWN_ENV = () => {
-  const env = { ...process.env };
-  for (const key of SCRUBBED_ENV) delete env[key];
-  return env;
-};
 
 export const bash: Tool = {
   name: "bash",
@@ -76,7 +69,7 @@ export const bash: Tool = {
       const child = spawn("bash", ["-c", command], {
         cwd: ctx.cwd,
         detached: true,
-        env: SPAWN_ENV(),
+        env: childEnv(),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -151,7 +144,7 @@ let nextShell = 1;
 
 function startBackground(command: string, cwd: string): string {
   const id = `shell_${nextShell++}`;
-  const child = spawn("bash", ["-c", command], { cwd, detached: true, env: SPAWN_ENV(), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("bash", ["-c", command], { cwd, detached: true, env: childEnv(), stdio: ["ignore", "pipe", "pipe"] });
   const entry: Background = { command, pid: child.pid ?? 0, output: "", read: 0, exit: null };
   const collect = (d: Buffer) => {
     entry.output += d.toString();

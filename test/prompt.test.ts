@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { Memory } from "../src/memory/store.js";
 import { createSession } from "../src/session.js";
 import type { Message } from "../src/types.js";
 import { fakeModel, recordingUi, testConfig, tmpDir } from "./helpers.js";
@@ -36,4 +37,16 @@ test("the system prompt and tools are the same in every folder and mode", async 
   expect(mb[1].content).toContain(b);
   expect(mb[1].content).toContain("test: `npm test`");
   expect(mb[1].content).toContain("mode: auto");
+});
+
+test("lessons from earlier runs are in the session context of every project", async () => {
+  const model = fakeModel([{ content: "a" }]);
+  stops.push(model.stop);
+  const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), memory: true });
+  const memory = Memory.open(config);
+  memory.remember({ project: "*", kind: "lesson", key: "check_latest_version", value: 'failed with {"ecosystem":"github"}; worked with {"name":"flutter"}', source: "observed" });
+  const session = await createSession(config, recordingUi().ui, { command: "prompt", memory });
+  await session.agent.run("hi", new AbortController().signal);
+  expect((model.requests[0].messages as Message[])[1].content).toContain('lesson check_latest_version: failed with {"ecosystem":"github"}');
+  memory.close();
 });

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { childEnv } from "./childEnv.js";
 import path from "node:path";
 import { createAgentFile } from "./agents.js";
 import { configFilePath, redactedConfig, saveSetting, VERSION, type Config, type Mode } from "./config.js";
@@ -368,6 +369,7 @@ function tildePath(p: string): string {
 
 function git(cwd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
+    // fsmonitor off: a planted .git/config could point it at any program.
+    execFile("git", ["-c", "core.fsmonitor=false", ...args], { cwd, maxBuffer: 4 * 1024 * 1024, env: childEnv() }, (err, stdout) => resolve(err ? null : stdout));
   });
 }

@@ -169,6 +169,48 @@ describe("agent loop", () => {
     expect(announcesAction("Done. I will be here if you need more help!", true)).toBe(false);
   });
 
+  test("an announcement after a purpose clause counts", () => {
+    // Seen live, twice in a row, with no tool call.
+    expect(announcesAction("To confirm the version of Flutter installed on your machine, I'll use the bash tool to run the `flutter --version` command.", true)).toBe(true);
+    expect(announcesAction("To be safe, the change is in a new file. Let me know if you want it elsewhere.", true)).toBe(false);
+  });
+
+  test("a failed call followed by one that works is remembered as a lesson for every project", async () => {
+    const { tool } = counter("probe", "safe", async (args) => {
+      if (args.n === 1) throw new Error("n must be 2 here");
+      return "ok";
+    });
+    const turns = [{ toolCalls: [{ name: "probe", arguments: '{"n": 1}' }] }, { toolCalls: [{ name: "probe", arguments: '{"n": 2}' }] }, { content: "done" }];
+    const { agent, memory } = setup(turns, [tool], { memory: true });
+    await agent.run("go", new AbortController().signal);
+    const lessons = memory!.recall("/another/project", 12, ["lesson"]);
+    expect(lessons).toHaveLength(1);
+    expect(lessons[0].key).toBe("probe");
+    expect(lessons[0].value).toContain("n must be 2 here");
+    expect(lessons[0].value).toContain('{"n":1}');
+    expect(lessons[0].value).toContain('{"n":2}');
+    memory!.close();
+  });
+
+  test("a failure that is never fixed, or a retry with the same arguments, teaches nothing", async () => {
+    let n = 0;
+    const flaky = counter("probe", "safe", async () => {
+      if (++n === 1) throw new Error("network hiccup");
+      return "ok";
+    }).tool;
+    const retry = setup([{ toolCalls: [{ name: "probe", arguments: '{"n": 1}' }] }, { toolCalls: [{ name: "probe", arguments: '{"n": 1}' }] }, { content: "done" }], [flaky], { memory: true });
+    await retry.agent.run("go", new AbortController().signal);
+    expect(retry.memory!.recall("/p", 12, ["lesson"])).toHaveLength(0);
+    const broken = counter("probe", "safe", async () => {
+      throw new Error("always fails");
+    }).tool;
+    const never = setup([{ toolCalls: [{ name: "probe", arguments: '{"n": 3}' }] }, { content: "gave up" }], [broken], { memory: true });
+    await never.agent.run("go", new AbortController().signal);
+    expect(never.memory!.recall("/p", 12, ["lesson"])).toHaveLength(0);
+    retry.memory!.close();
+    never.memory!.close();
+  });
+
   test("asked for a change but nothing changed: one nudge to make it, not to show it", async () => {
     const { tool: edit, calls } = counter("edit_file", "write");
     const reply = "The bug is in src/sum.js: the loop should start at 0.\n```js\nfor (let i = 0; i < numbers.length; i++) total += numbers[i];\n```";

@@ -125,7 +125,8 @@ const QUESTION = /^\s*(?:why|what|where|how|when|which|who|explain|describe)\b/i
 export function wantsChange(request: string): boolean {
   return CHANGE_REQUEST.test(request) && !QUESTION.test(request);
 }
-const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then|so)[,.!]?\s+)?`;
+// Also a leading clause: "To confirm the installed version, I'll run …"
+const FILLER = String.raw`^(?:(?:ok(?:ay)?|sure|great|alright|first|now|next|then|so)[,.!]?\s+)?(?:[^,.!?]{1,100},\s*)?`;
 const VERBS =
   "run|re-?run|check|look|read|search|find|fix|update|edit|open|start|try|inspect|examine|investigate|create|write|add|implement|locate|use|call|install|verify|test|review|explore|list|modify|change|make|begin|identify|analy[sz]e|debug|see|get|take|navigate|correct|resolve|apply|execute|go ahead";
 // "I'll run …", "Let's locate …" (an action verb, so "Let me know …" and "I will be here …" don't count)
@@ -156,6 +157,8 @@ export class Agent {
   /** The session context, fixed when first sent (null until then), and the last mode the model was told. */
   private opening: string | null = null;
   private toldMode: Mode;
+  /** This run's failed calls by tool: one that later works with other arguments becomes a lesson. */
+  private failedCalls = new Map<string, { args: string; error: string }>();
   private files: FileTracker = new Map();
   private searchResults = new Set<string>();
   private todoList: Todo[] = [];
@@ -301,6 +304,7 @@ export class Agent {
     const stats: RunStats = { turns: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, tokensEstimated: false, modelMs: 0, toolMs: 0, durationMs: 0, tests: null };
     const result: RunResult = { outcome: "completed", text: "", stats, calls: [] };
     const repeats = new Map<string, number>();
+    this.failedCalls.clear();
     let nudges = 0;
     let changeNudged = false;
     const changeWanted = wantsChange(userInput);
@@ -570,6 +574,7 @@ export class Agent {
       memory.recordToolEvent(runId, name, !failure, failure?.kind ?? null, ms);
       if (failure && failure.kind !== "denied" && failure.kind !== "cancelled") memory.recordFailure(runId, config.cwd, name, failure.message);
     });
+    this.safely(() => this.learnFrom(name, p, failure));
     if (!failure && name === "bash") this.safely(() => this.observeCommand(String(p.args?.command ?? ""), output, runId, result));
     // Something changed (a file write, a command): other calls may now give different results.
     if (!failure && p.key && (p.tool?.risk === "write" || p.tool?.risk === "exec")) {
@@ -586,6 +591,31 @@ export class Agent {
     }
     ui.toolUpdate({ ...view, state: !failure ? "ok" : failure.kind === "denied" ? "declined" : "error", ...shown });
     return { output, declined: failure?.kind === "denied" };
+  }
+
+  /**
+   * Learning from mistakes: a call that failed, then a call of the same tool with other arguments
+   * that worked, is remembered for every project and shown in later sessions' context. Retries with
+   * the same arguments (a flaky network) teach nothing.
+   */
+  private learnFrom(name: string, p: Prepared, failure: ToolFailure | null): void {
+    const args = p.args ? JSON.stringify(p.args) : p.call.arguments || "{}";
+    if (failure) {
+      if (failure.kind === "failed" || failure.kind === "invalid_args") this.failedCalls.set(name, { args, error: failure.message.split("\n")[0].slice(0, 200) });
+      return;
+    }
+    const before = this.failedCalls.get(name);
+    this.failedCalls.delete(name);
+    if (!before || before.args === args || !this.d.memory?.enabled) return;
+    this.d.memory.remember({
+      project: "*",
+      kind: "lesson",
+      key: name,
+      value: `"${before.error}" with ${before.args.slice(0, 150)}; worked with ${args.slice(0, 150)}`,
+      source: "observed",
+      confidence: 0.6,
+      ttlDays: 180,
+    });
   }
 
   /** Learn from shell results: whether tests passed, and which test/build commands work here. */

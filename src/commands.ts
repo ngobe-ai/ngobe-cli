@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { childEnv } from "./childEnv.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import readline from "node:readline/promises";
@@ -75,7 +76,7 @@ async function cmdTest(loaded: LoadedConfig): Promise<number> {
   console.error(dim(`$ ${command}${project.commands.test ? "" : " (learned from an earlier run)"}`));
   const started = Date.now();
   const code = await new Promise<number>((resolve) => {
-    const child = spawn("bash", ["-c", command], { cwd: config.cwd, stdio: "inherit" });
+    const child = spawn("bash", ["-c", command], { cwd: config.cwd, env: childEnv(), stdio: "inherit" });
     child.on("error", () => resolve(127));
     child.on("close", (c) => resolve(c ?? 1));
   });

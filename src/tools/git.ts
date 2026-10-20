@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { childEnv } from "../childEnv.js";
 import type { Args, Need, Tool, ToolContext } from "../types.js";
 import { isSecretPath, optInt, reqStr, resolveInside } from "./util.js";
 
@@ -13,7 +14,7 @@ export function git(args: string[], ctx: ToolContext, timeoutMs = 30_000, readOn
     execFile(
       "git",
       readOnly ? ["-c", "core.fsmonitor=false", ...args] : args,
-      { cwd: ctx.cwd, signal: ctx.signal, timeout: timeoutMs, maxBuffer: MAX_OUTPUT * 4 },
+      { cwd: ctx.cwd, signal: ctx.signal, timeout: timeoutMs, maxBuffer: MAX_OUTPUT * 4, env: childEnv() },
       (err, stdout, stderr) => {
         if (err) reject(new Error((stderr || err.message).trim()));
         else resolve(stdout.length > MAX_OUTPUT ? stdout.slice(0, MAX_OUTPUT) + "\n[output truncated]" : stdout);
