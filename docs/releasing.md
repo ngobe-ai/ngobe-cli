@@ -24,8 +24,10 @@ Bun does all building and testing. The npm CLI appears only where the npm regist
 
 ## Cutting a release
 
-    npm version minor            # or patch / major / 0.4.0-rc.1; updates package.json, commits, tags v0.x.y
-    git push --follow-tags
+    bun run release patch "what changed, in a few words"   # or minor / major / 0.4.0-rc.1
+    bun run release patch --dry-run                         # the checks only
+
+`scripts/release.ts` refuses unless you're on `main`, with nothing uncommitted, and up to date with `origin/main`. It bumps `package.json`, then runs the tests, the typecheck, the build and the Node smoke test (v0.3.6 failed CI on Node only); if one fails, `package.json` goes back and nothing is committed. Then it commits `release: <version> — <summary>`, tags `v<version>` (annotated) and pushes `main` and the tag, which starts the release workflow. It prints the `gh run watch` command to follow it.
 
 A version with a hyphen (`0.4.0-rc.1`) becomes a GitHub pre-release and is published to npm under the `next` tag; Homebrew is left alone.
 

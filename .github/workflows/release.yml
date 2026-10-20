@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.3.0 (npm version minor && git push --follow-tags) to publish:
+# Push a tag like v0.3.0 (bun run release minor "summary", see docs/releasing.md) to publish:
 # standalone binaries + SHA256SUMS on GitHub Releases, then npm and Homebrew (publish.yml).
 on:
   push:

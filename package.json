@@ -46,6 +46,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build:binaries": "bun scripts/build-binaries.ts",
+    "release": "bun scripts/release.ts",
     "prepack": "bun run build"
   },
   "dependencies": {
