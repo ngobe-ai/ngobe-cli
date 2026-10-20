@@ -49,6 +49,15 @@ To use the server's models from your laptop, let Ngobe tunnel over SSH (configur
       # then use the API id it gets (e.g. docker.io/ngobe/<name>:16k) as NGOBE_MODEL
 
   16k comfortably holds Ngobe's ~2,700 tokens of tools and instructions plus `NGOBE_MAX_CONTEXT_CHARS=32000` of history.
+- Keep Q4_K_M on CPU; Q4_0 is not faster with a current llama.cpp. Measured on a 6-vCPU AMD EPYC (AVX2), llama.cpp build 9879, Qwen2.5-Coder 7B, Ngobe's 1,550-token first request without cache:
+
+  | | Q4_0 | Q4_K_M |
+  |---|---|---|
+  | Prompt reading | 23.3–23.7 tok/s | 23.1–23.8 tok/s |
+  | Generation | 8.7–9.7 tok/s | 10.7–11.7 tok/s |
+  | RAM (anonymous) | 4.8 GiB | 4.4 GiB |
+
+  To try another quantization, download the one `.gguf` and use `docker model package --gguf <file> --context-size 16384 …`: pulling `hf.co/<repo>:Q4_0` matches every file whose name contains Q4_0 (Q4_0_4_4, Q4_0_8_8 …) and downloads them all.
 - Size the history to the model's context window (`NGOBE_MAX_CONTEXT_CHARS`, see configuration.md). On CPU, prompt processing time grows with context; smaller windows answer sooner.
 - Raise `NGOBE_REQUEST_TIMEOUT` if `doctor` shows long first-token times.
 
