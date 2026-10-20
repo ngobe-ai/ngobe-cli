@@ -42,7 +42,8 @@ export function openDb(file: string, opts: { readOnly?: boolean } = {}): Db {
       String(typeof w === "string" ? w : w.message).includes("SQLite") ? undefined : (emit as (...a: unknown[]) => void).call(process, w, ...rest)) as typeof process.emitWarning;
     try {
       const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (f: string, o?: object) => RawDb };
-      raw = new DatabaseSync(file, opts.readOnly ? { readOnly: true } : undefined);
+      // node:sqlite rejects an explicit undefined for its options: pass them only when there are some.
+      raw = opts.readOnly ? new DatabaseSync(file, { readOnly: true }) : new DatabaseSync(file);
     } finally {
       process.emitWarning = emit;
     }
