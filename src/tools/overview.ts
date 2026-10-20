@@ -3,7 +3,8 @@ import path from "node:path";
 import { detectProject } from "../project.js";
 import type { Tool } from "../types.js";
 import { listFiles } from "./files.js";
-import { resolveInside } from "./util.js";
+import { git } from "./git.js";
+import { didYouMean, resolveInside, similarPaths } from "./util.js";
 
 /** About 700 tokens: half a minute for a 7B model on a CPU to read, instead of minutes of paths. */
 const BUDGET = 2_800;
@@ -140,7 +141,7 @@ export async function briefDescription(dir: string): Promise<string> {
 }
 
 async function describeProject(dir: string, label: string, signal?: AbortSignal): Promise<string> {
-  const [manifest, project, files, readme] = await Promise.all([readManifest(dir), detectProject(dir), listFiles(dir, signal), readmeText(dir)]);
+  const [manifest, project, files, readme, commits] = await Promise.all([readManifest(dir), detectProject(dir), listFiles(dir, signal), readmeText(dir), latestCommits(dir, signal)]);
   const lines = [stackLine(label, project.stack, manifest)];
   const commands = Object.entries(project.commands).map(([k, v]) => `${k} \`${v}\``);
   if (commands.length) lines.push(`Commands: ${commands.join(", ")}`);
@@ -162,9 +163,21 @@ async function describeProject(dir: string, label: string, signal?: AbortSignal)
     lines.push(`${source}/: ${[...direct, ...subs].join(", ")}`);
   }
   if (root.length) lines.push(`Root files: ${root.slice(0, 15).join(", ")}${root.length > 15 ? ", …" : ""}`);
+  if (commits) lines.push(`Latest commits, newest first: ${commits}`);
   if (manifest?.deps.length) lines.push(`Dependencies: ${manifest.deps.slice(0, 25).join(", ")}${manifest.deps.length > 25 ? `, +${manifest.deps.length - 25} more` : ""}`);
   if (readme) lines.push(`README: ${readme}`);
   return lines.join("\n");
+}
+
+/** The folder's last five commits ("2 days ago: Add the player; …"): where the work stopped. "" outside git. */
+async function latestCommits(dir: string, signal?: AbortSignal): Promise<string> {
+  const log = await git(["log", "-n", "5", "--no-merges", "--format=%cr: %s", "--", "."], { cwd: dir, signal }, 10_000, true).catch(() => "");
+  return log
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => (l.length > 140 ? `${l.slice(0, 140)}…` : l))
+    .join("; ");
 }
 
 /** A folder holding several projects (no manifest of its own): each one in a line. */
@@ -205,7 +218,7 @@ export const projectOverview: Tool = {
   async run(args, ctx) {
     const rel = typeof args.path === "string" && args.path.trim() ? args.path.trim() : ".";
     const dir = resolveInside(ctx.cwd, rel);
-    if (!(await fs.stat(dir).catch(() => null))?.isDirectory()) throw new Error(`not a folder: ${rel}`);
+    if (!(await fs.stat(dir).catch(() => null))?.isDirectory()) throw new Error(`not a folder: ${rel}.${didYouMean(await similarPaths(ctx.cwd, rel, "folder"))}`);
     const label = rel === "." ? path.basename(dir) : rel.replace(/\/+$/, "");
     const [manifest, project] = await Promise.all([readManifest(dir), detectProject(dir)]);
     if (!manifest && !project.stack.length) {

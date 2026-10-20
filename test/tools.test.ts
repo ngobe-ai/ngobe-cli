@@ -142,6 +142,11 @@ describe("read_file", () => {
     expect(await readFile.run({ path: "img.bin" }, ctx())).toMatch(/^\[binary data/);
     await expect(readFile.run({ path: "src" }, ctx())).rejects.toThrow(/director/i);
   });
+
+  test("a file that isn't there: files with that name in the project are suggested", async () => {
+    await expect(readFile.run({ path: "a.ts" }, ctx())).rejects.toThrow("Did you mean src/a.ts?");
+    await expect(readFile.run({ path: "nowhere.ts" }, ctx())).rejects.toThrow("Use glob to find the right path.");
+  });
 });
 
 describe("todo_write and exit_plan_mode", () => {

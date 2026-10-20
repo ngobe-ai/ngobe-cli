@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Config, Mode } from "./config.js";
-import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, transcript, trimHistory, truncate } from "./context.js";
+import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, toolOutputLimit, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
@@ -14,6 +14,7 @@ import { fromImage, uiHint, wantsUi } from "./design.js";
 import { fileHandoff } from "./toolProtocol.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
+import { walkDirs } from "./tools/util.js";
 import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
 import type { AgentDef } from "./agents.js";
 import { printable, type Activity, type Ui } from "./ui.js";
@@ -154,6 +155,50 @@ export function namedFiles(input: string, cwd: string): string[] {
   return found;
 }
 
+// Read whole when named: the answer can be on any page. Code is read a page at a time (grep finds the rest).
+const DOCUMENT = /\.(?:pdf|docx?|odt|rtf|pptx?|odp|xlsx?|ods|csv|epub|eml|txt|md)$/i;
+// A folder with one of these is a project: "the readiness portal" names one, "the test folder" doesn't.
+const PROJECT_MARKERS = ["package.json", "pubspec.yaml", "composer.json", "Cargo.toml", "go.mod", "pyproject.toml", "requirements.txt", "Gemfile", "pom.xml", "build.gradle", "build.gradle.kts", ".git"];
+
+/**
+ * Projects below cwd (three levels at most) whose folder name holds a word of the request:
+ * "the readiness portal" in ~/me/COTE is inspire_africa/inspire-readiness/. At most three.
+ */
+export async function projectsNamed(input: string, cwd: string): Promise<string[]> {
+  // Not the words of paths and file names ("bruno" and "site" in /Users/bruno/Site\ map.docx).
+  const prose = input
+    .replace(/\\ /g, "\0")
+    .split(/\s+/)
+    .filter((t) => !/[\\/]/.test(t) && !t.includes("\0") && !/\.[A-Za-z0-9]{1,8}[,;:!?)]*$/.test(t))
+    .join(" ");
+  const words = new Set(prose.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4));
+  if (!words.size) return [];
+  const found: string[] = [];
+  for (const { rel, entries } of await walkDirs(cwd, 3, 1_500)) {
+    const name = path.basename(rel);
+    const parts = name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/);
+    if (![...parts, name.toLowerCase()].some((p) => words.has(p))) continue;
+    if (entries.some((e) => PROJECT_MARKERS.includes(e.name))) found.push(`${rel.split(path.sep).join("/")}/`);
+    if (found.length >= 3) break;
+  }
+  return found;
+}
+
+// Asking how far the work got: "where did we stop", "what's left", "how far along are we".
+const PROGRESS =
+  /\b(?:where (?:did|do|have|had) (?:we|you|i) (?:stop(?:ped)?|leave|left)|left off|how far (?:along|are|did|have|has)|progress (?:on|of|with)|what(?:'s| is| has been| was| remains)(?: (?:still|already))? (?:done|left|remaining|missing|implemented|finished|built|pending)|status of)\b/i;
+
+// Not an answer: what the model copies from a context message or a tool result, or nothing at all.
+const ACKNOWLEDGMENT = /^\s*(?:(?:understood|got it|noted|ok(?:ay)?|sure|alright|all right|i see|i understand|acknowledged|certainly|of course)?[.!]?\s*$|<tool_(?:response|result)>)/i;
+// Giving up: "the document does not provide …", "I don't have access to …", "unable to determine …".
+const GIVES_UP =
+  /\b(?:(?:document|file|text|content|context|information) (?:does|do|did)(?: not|n't) (?:provide|contain|mention|include|specify|say)|(?:does|do|did)(?: not|n't) (?:provide|contain|include|mention|give) (?:any )?(?:specific |detailed |clear )?(?:information|details)|no (?:specific |further |detailed )?information (?:about|on|regarding)|not enough information|(?:unable|not able|can ?not|can't) (?:to )?(?:determine|find|locate|tell)|(?:don't|do not) have (?:access|enough information)|not (?:specified|mentioned|provided) in the (?:document|file|text|content))\b/i;
+const SEARCH_TOOLS = ["glob", "grep", "project_overview"];
+
+function quoteRequest(request: string): string {
+  return `"${request.length > 500 ? `${request.slice(0, 500)}…` : request}"`;
+}
+
 // Worth a lookup before the first turn: wiring in an external service or API (their setup and APIs
 // change), or moving to a new version or setting a tool up. Not ordinary building with a framework
 // the model knows ("add a settings page to the Flutter app"): there, a search only costs time.
@@ -288,7 +333,7 @@ export class Agent {
     // The conversation so far plus a throwaway message: the server caches everything before it,
     // which is exactly the start of the next real request.
     this.warming ??= this.d.llm
-      .warm([...this.conversation(), { role: "user", content: "hi" }], toolsForMode(this.d.tools, this.mode), signal)
+      .warm(this.conversation({ role: "user", content: "hi" }), toolsForMode(this.d.tools, this.mode), signal)
       .then(
         (ms) => {
           this.d.log?.event("warmup", { ms });
@@ -307,18 +352,23 @@ export class Agent {
     return this.warming;
   }
 
-  /** What every request starts with: the system prompt, the summary of older turns, the history. */
-  private conversation(): Message[] {
-    // The summary was written from tool output, so it goes in the conversation, not the system prompt.
-    const earlier: Message[] = this.summary
-      ? [
-          { role: "user", content: `[Summary of the earlier conversation, for context only]\n${this.summary}` },
-          { role: "assistant", content: "Understood." },
-        ]
-      : [];
-    const context = this.sessionContext();
-    const opening: Message[] = context ? [{ role: "user", content: context }, { role: "assistant", content: "Understood." }] : [];
-    return [{ role: "system", content: this.systemFor(this.mode) }, ...opening, ...earlier, ...this.messages];
+  /**
+   * What every request starts with: the system prompt, then the history, its first user message
+   * opened by the session context and the summary of older turns (written from tool output, so
+   * not in the system prompt). They used to be a message of their own with a scripted reply,
+   * "Understood.", which the model copied as its answer to a question about a document.
+   */
+  private conversation(next?: Message): Message[] {
+    const summary = this.summary ? `[Summary of the earlier conversation, for context only]\n${this.summary}` : "";
+    const opening = [this.sessionContext(), summary].filter(Boolean).join("\n\n");
+    const messages = next ? [...this.messages, next] : this.messages;
+    const [first, ...rest] = messages;
+    const history: Message[] = !opening
+      ? messages
+      : first?.role === "user" && typeof first.content === "string"
+        ? [{ ...first, content: `${opening}\n\n${first.content}` }, ...rest]
+        : [{ role: "user", content: opening }, ...messages];
+    return [{ role: "system", content: this.systemFor(this.mode) }, ...history];
   }
 
   private sessionContext(): string {
@@ -415,6 +465,8 @@ export class Agent {
     let nudges = 0;
     let cutoffs = 0;
     let changeNudged = false;
+    let answerNudged = false;
+    let lookNudged = false;
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
@@ -445,7 +497,9 @@ export class Agent {
     // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
     const design = wantsUi(userInput) ? uiHint(this.d.stack ?? [], fromImage(userInput)) : "";
-    const extras = [resumed ? resumeNote(resumed) : "", design, fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
+    const projects = await projectsNamed(userInput, config.cwd).catch(() => []);
+    const located = projects.length ? `(Projects here that the request may mean: ${projects.join(", ")})` : "";
+    const extras = [resumed ? resumeNote(resumed) : "", located, design, fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
     this.messages.push({ role: "user", content: [userInput, ...extras].join("\n\n") });
     this.status = { label: "Thinking", since: started, tokens: 0 };
     this.running = true;
@@ -456,8 +510,10 @@ export class Agent {
       // "analyse the hype project" looks it over; "add Google sign-in to the Flutter app" checks the
       // current version and docs (the model's training data is older than the libraries).
       const byName = new Map(toolsForMode(this.d.tools, this.mode).map((t) => [t.name, t]));
-      const overview = this.overviewTarget(userInput);
-      const named = byName.has("read_file") ? namedFiles(userInput, config.cwd).map((f): [string, Args] => ["read_file", { path: f, limit: 150 }]) : [];
+      // "Where did we stop on the readiness portal?": the project's overview has its latest commits.
+      const progress = PROGRESS.test(userInput) && byName.has("project_overview") ? (projects[0]?.replace(/\/$/, "") ?? ".") : null;
+      const overview = this.overviewTarget(userInput) ?? progress;
+      const named = byName.has("read_file") ? namedFiles(userInput, config.cwd).map((f): [string, Args] => ["read_file", DOCUMENT.test(f) ? { path: f } : { path: f, limit: 150 }]) : [];
       const auto: [string, Args][] = [...(overview !== null ? [["project_overview", { path: overview }] as [string, Args]] : []), ...named, ...researchCalls(userInput, byName)];
       if (auto.length) {
         this.tellMode();
@@ -469,6 +525,9 @@ export class Agent {
         } finally {
           calls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
         }
+        // The request again, after what was looked up: seen live, with it above two long results,
+        // the 7B answered with a made-up <tool_response> block.
+        this.messages.push({ role: "user", content: `(Ngobe looked these up for the request. Now answer it, or keep working with the tools: ${quoteRequest(userInput)})` });
       }
       for (;;) {
         if (stats.turns >= config.maxTurns) {
@@ -557,6 +616,24 @@ export class Agent {
             nudges++;
             this.messages.push({ role: "user", content: NUDGE });
             this.d.log?.event("nudge", { run: runId, reply: turn.content.slice(0, 120) });
+            continue;
+          }
+          // "Understood." or nothing: once, the request again.
+          if (!answerNudged && nudges < MAX_NUDGES && ACKNOWLEDGMENT.test(turn.content)) {
+            answerNudged = true;
+            nudges++;
+            this.messages.push({ role: "user", content: `That doesn't answer the request. Answer it now, using the tools if you need to: ${quoteRequest(userInput)}` });
+            this.d.log?.event("nudge", { run: runId, kind: "answer", reply: turn.content.slice(0, 120) });
+            continue;
+          }
+          // "The document does not say …" before looking in the project: once, look first.
+          const searched = result.calls.some((c) => SEARCH_TOOLS.includes(c.name));
+          if (!lookNudged && nudges < MAX_NUDGES && !searched && GIVES_UP.test(turn.content) && SEARCH_TOOLS.some((t) => byName.has(t))) {
+            lookNudged = true;
+            nudges++;
+            const how = SEARCH_TOOLS.filter((t) => byName.has(t)).join(", ");
+            this.messages.push({ role: "user", content: `Don't give up yet: look in the project first (${how}) for what the request is about, read what you find, then answer: ${quoteRequest(userInput)}` });
+            this.d.log?.event("nudge", { run: runId, kind: "look", reply: turn.content.slice(0, 120) });
             continue;
           }
           // Asked for a change, nothing changed yet: small models describe the fix (or show the
@@ -731,8 +808,7 @@ export class Agent {
       output = `Error: ${failure.message}`;
     } else {
       try {
-        // Tool results are re-read on every later turn: keep them within a share of the context budget.
-        const limit = Math.min(20_000, Math.max(2_000, Math.floor(config.maxContextChars / 5)));
+        const limit = toolOutputLimit(config.maxContextChars);
         output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, { ...this.context(s), report: (v) => (reported = v) }), signal), limit);
       } catch (err) {
         failure = err instanceof ToolFailure ? err : new ToolFailure(signal.aborted ? "cancelled" : "failed", err instanceof Error ? err.message : String(err));

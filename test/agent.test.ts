@@ -304,6 +304,74 @@ describe("agent loop", () => {
     expect(warm).toHaveLength(4); // system, "hello", the reply, "hi"
   });
 
+  test("a warm-up before the first request caches the session context too", async () => {
+    const model = fakeModel([{ content: "." }, { content: "hi" }]);
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "edit" });
+    const { ui } = recordingUi();
+    const agent = new Agent({ config, llm: new LLM(config), tools: [], ui, perms: new RealPermissions(ui, "edit"), systemPrompt: "sys", sessionContext: "Session context: cwd /p", memory: null });
+    await agent.warmup();
+    await agent.run("hello", new AbortController().signal);
+    const [warm, real] = model.requests.map((r) => r.messages as Message[]);
+    expect(warm).toHaveLength(2);
+    expect(real).toHaveLength(2);
+    // The server reuses its cache up to the first difference: the context and the line after it.
+    expect(warm[1].content).toBe("Session context: cwd /p\n\nhi");
+    expect(real[1].content).toBe("Session context: cwd /p\n\nhello");
+  });
+
+  test("after /compact the summary opens the next request, with no scripted reply", async () => {
+    const { agent, model } = setup([{ content: "Done: fixed sum()." }, { content: "The user fixed sum() in src/sum.js." }, { content: "Added tests." }], []);
+    await agent.run("fix sum", new AbortController().signal);
+    await agent.compactNow(new AbortController().signal);
+    await agent.run("now add tests", new AbortController().signal);
+    expect(model.requests).toHaveLength(3); // the run, the summary, the next run
+    const last = model.requests[2].messages as Message[];
+    expect(last.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(last[1].content).toContain("The user fixed sum() in src/sum.js.");
+    expect(String(last[1].content).endsWith("now add tests")).toBe(true);
+  });
+
+  // Seen live: "as per this document <docx> where did we stop on the readiness portal?" was
+  // answered "Understood." (the reply scripted after the session context, copied).
+  test("a bare acknowledgment is not an answer: the model is asked again, with the request", async () => {
+    const { agent, model } = setup([{ content: "Understood." }, { content: "The site map's HOME and FIRST STEP are built; READINESS is next." }], []);
+    const result = await agent.run("where did we stop on the readiness portal?", new AbortController().signal);
+    expect(result.text).toBe("The site map's HOME and FIRST STEP are built; READINESS is next.");
+    const nudge = (model.requests[1].messages as Message[]).at(-1);
+    expect(nudge?.role).toBe("user");
+    expect(nudge?.content).toContain("where did we stop on the readiness portal?");
+  });
+
+  test("an empty reply is not an answer either; a second one ends the run", async () => {
+    const { agent, model } = setup([{ content: "" }, { content: "" }, { content: "unused" }], []);
+    const result = await agent.run("what does sum() do?", new AbortController().signal);
+    expect(model.requests).toHaveLength(2);
+    expect(result.text).toBe("");
+  });
+
+  // Seen live: the model read 150 of 437 lines and answered "the document does not provide
+  // specific information on where the changes were stopped", without looking at the code.
+  test("giving up without looking in the project: told to look first, once", async () => {
+    const { tool: glob, calls } = counter("glob");
+    glob.parameters = { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] };
+    const giveUp = "The document does not provide specific information on where the changes were stopped.";
+    const { agent, model } = setup([{ content: giveUp }, { toolCalls: [{ name: "glob", arguments: '{"pattern": "**/*readiness*"}' }] }, { content: "HOME is done." }], [glob]);
+    const result = await agent.run("where did we stop on the readiness portal?", new AbortController().signal);
+    expect(calls).toHaveLength(1);
+    expect(result.text).toBe("HOME is done.");
+    const nudge = (model.requests[1].messages as Message[]).at(-1);
+    expect(nudge?.content).toContain("glob");
+    // A real answer about code isn't giving up.
+    const answer = setup([{ content: "The function does not have a return statement, so it returns undefined; it doesn't include the last item either." }, { content: "unused" }], [counter("glob").tool]);
+    await answer.agent.run("why does sum() return undefined?", new AbortController().signal);
+    expect(answer.model.requests).toHaveLength(1);
+    // Once only, and not after the model has searched.
+    const searched = setup([{ toolCalls: [{ name: "glob", arguments: '{"pattern": "**/x"}' }] }, { content: giveUp }, { content: "unused" }], [counter("glob").tool]);
+    expect((await searched.agent.run("where is x?", new AbortController().signal)).text).toBe(giveUp);
+    expect(searched.model.requests).toHaveLength(2);
+  });
+
   test("while the server loads the model the status line says so", async () => {
     let release = () => {};
     const gate = new Promise<void>((r) => (release = r));
@@ -383,10 +451,11 @@ describe("agent loop", () => {
     agent.setMode("auto");
     await agent.run("two", new AbortController().signal);
     const [first, second] = model.requests.map((r) => r.messages as Message[]);
-    expect(first.slice(0, 3)).toEqual([
+    // No scripted assistant reply after the context: seen live, the model copied it ("Understood.")
+    // as its whole answer to a question about a document.
+    expect(first).toEqual([
       { role: "system", content: "sys" },
-      { role: "user", content: expect.stringContaining("cwd /p · mode: edit") },
-      { role: "assistant", content: "Understood." },
+      { role: "user", content: expect.stringMatching(/cwd \/p · mode: edit[\s\S]*\n\none$/) },
     ]);
     // Everything already sent is sent again unchanged, so llama.cpp only reads what is new.
     expect(second.slice(0, first.length)).toEqual(first);
@@ -424,8 +493,20 @@ describe("agent loop", () => {
     await agent.run("analyse and understand the hype project in ~/me/COTE", new AbortController().signal);
     expect(calls).toEqual([{ path: "hype" }]);
     const first = model.requests[0].messages as Message[];
-    expect(first.at(-1)).toMatchObject({ role: "tool", content: "project_overview ok" });
-    expect(first.at(-2)?.role).toBe("assistant");
+    expect(first.at(-3)?.role).toBe("assistant");
+    expect(first.at(-2)).toMatchObject({ role: "tool", content: "project_overview ok" });
+    // Seen live: with the request above two long results, the 7B replied with a made-up
+    // <tool_response> block. The request comes again, after what was looked up.
+    expect(first.at(-1)?.role).toBe("user");
+    expect(first.at(-1)?.content).toContain('"analyse and understand the hype project in ~/me/COTE"');
+  });
+
+  test("a reply that only imitates a tool result is not an answer", async () => {
+    const echo = "<tool_response>\n[Word document, ~3223 words, 35 KB]\n     92\t[Headings further on: 429 READINESS]\n</tool_response>";
+    const { agent, model } = setup([{ content: echo }, { content: "HOME and FIRST STEP are done; READINESS is next." }], []);
+    const result = await agent.run("where did we stop?", new AbortController().signal);
+    expect(result.text).toBe("HOME and FIRST STEP are done; READINESS is next.");
+    expect(model.requests).toHaveLength(2);
   });
 
   test("asked to build with a framework or service, the current version and docs are looked up first", async () => {
@@ -478,11 +559,61 @@ describe("agent loop", () => {
     fs.writeFileSync(path.join(config.cwd, "src", "sum.js"), "x");
     // Seen live: "I don't have access to the file", with no tool call.
     await agent.run(`How much is due on ${path.join(downloads, "My\\ Invoice.pdf")} and in src/sum.js? Also create src/new.ts`, new AbortController().signal);
-    expect(read.calls).toEqual([
-      { path: path.join(downloads, "My Invoice.pdf"), limit: 150 },
-      { path: "src/sum.js", limit: 150 },
-    ]);
+    // A document is read whole (the answer can be on any page); code a page at a time.
+    expect(read.calls).toEqual([{ path: path.join(downloads, "My Invoice.pdf") }, { path: "src/sum.js", limit: 150 }]);
     expect((model.requests[0].messages as Message[]).filter((m) => m.role === "tool")).toHaveLength(2);
+  });
+
+  // Seen live: in ~/me/COTE, "the readiness portal" is inspire_africa/inspire-readiness; the model
+  // never looked for it.
+  test("projects here that the request names are pointed out, with the request", async () => {
+    const { agent, model, config } = setup([{ content: "ok" }], []);
+    for (const d of ["inspire_africa/inspire-readiness", "inspire_africa/inspire-africa-community-vault", "node_modules/readiness"]) {
+      fs.mkdirSync(path.join(config.cwd, d), { recursive: true });
+      fs.writeFileSync(path.join(config.cwd, d, "package.json"), "{}");
+    }
+    await agent.run("where did we stop on making changes to the readiness portal", new AbortController().signal);
+    const user = (model.requests[0].messages as Message[]).at(-1)!.content as string;
+    expect(user.startsWith("where did we stop on making changes to the readiness portal")).toBe(true);
+    expect(user).toContain("inspire_africa/inspire-readiness/");
+    expect(user).not.toContain("community-vault");
+    expect(user).not.toContain("node_modules");
+  });
+
+  // Seen live: told where the project was, the model grepped "readiness portal", then "UAT" twice,
+  // and never looked at the project's latest commits, which say where the work stopped.
+  test("a progress question looks over the project it names first (its latest commits)", async () => {
+    const { tool, calls } = counter("project_overview");
+    const { agent, config } = setup([{ content: "HOME and FIRST STEP are done." }], [tool]);
+    fs.mkdirSync(path.join(config.cwd, "inspire_africa/inspire-readiness"), { recursive: true });
+    fs.writeFileSync(path.join(config.cwd, "inspire_africa/inspire-readiness/package.json"), "{}");
+    await agent.run("where did we stop on making changes to the readiness portal", new AbortController().signal);
+    expect(calls).toEqual([{ path: "inspire_africa/inspire-readiness" }]);
+    // In the project itself, the project.
+    const here = counter("project_overview");
+    const own = setup([{ content: "ok" }], [here.tool]);
+    await own.agent.run("what's left to do here?", new AbortController().signal);
+    expect(here.calls).toEqual([{ path: "." }]);
+  });
+
+  // Seen live: "bruno" and "site" from /Users/bruno/Downloads/Site\ map.docx pointed at
+  // bruno-portfolio/ and hypemuzik-site/.
+  test("the words of a file path in the request don't point at projects", async () => {
+    const { agent, model, config } = setup([{ content: "ok" }], []);
+    for (const d of ["bruno-portfolio", "hypemuzik-site", "inspire-readiness"]) {
+      fs.mkdirSync(path.join(config.cwd, d), { recursive: true });
+      fs.writeFileSync(path.join(config.cwd, d, "package.json"), "{}");
+    }
+    await agent.run("as per /Users/bruno/Downloads/Site\\ map\\ Katie-AP.docx where did we stop on the readiness portal", new AbortController().signal);
+    const user = (model.requests[0].messages as Message[]).at(-1)!.content as string;
+    expect(user).toContain("(Projects here that the request may mean: inspire-readiness/)");
+  });
+
+  test("folders that aren't projects aren't pointed out (everyday words name folders too)", async () => {
+    const { agent, model, config } = setup([{ content: "ok" }], []);
+    for (const d of ["src/app", "test", "docs/changes"]) fs.mkdirSync(path.join(config.cwd, d), { recursive: true });
+    await agent.run("fix the test in the app and document the changes", new AbortController().signal);
+    expect((model.requests[0].messages as Message[]).at(-1)!.content).toBe("fix the test in the app and document the changes");
   });
 
   test("a UI to build from an image comes with design guidance", async () => {

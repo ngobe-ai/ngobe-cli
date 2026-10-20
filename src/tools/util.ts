@@ -139,3 +139,50 @@ export function optInt(args: Args, key: string): number | undefined {
   if (!Number.isFinite(n)) throw new Error(`argument "${key}" must be a number`);
   return Math.floor(n);
 }
+
+// Never worth walking into: dependencies, build output, caches.
+const SKIP_DIRS = new Set(["node_modules", "vendor", "build", "dist", "out", "target", "coverage", "Pods", "__pycache__", "venv"]);
+
+/**
+ * The folders under root (not root itself), breadth first, to maxDepth levels, with their
+ * entries; hidden folders and SKIP_DIRS are left out, and at most maxDirs folders are read.
+ */
+export async function walkDirs(root: string, maxDepth: number, maxDirs = 3_000): Promise<{ rel: string; entries: fs.Dirent[] }[]> {
+  const out: { rel: string; entries: fs.Dirent[] }[] = [];
+  let level = [""];
+  for (let depth = 0; depth < maxDepth && level.length && out.length < maxDirs; depth++) {
+    const next: string[] = [];
+    for (const rel of level) {
+      const entries = await fs.promises.readdir(path.join(root, rel), { withFileTypes: true }).catch(() => []);
+      if (rel) out.push({ rel, entries });
+      if (out.length >= maxDirs) break;
+      for (const e of entries) if (e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS.has(e.name)) next.push(path.join(rel, e.name));
+    }
+    level = next;
+  }
+  // The deepest level was listed above but not read: its folders count, without their entries.
+  for (const rel of level) if (out.length < maxDirs) out.push({ rel, entries: [] });
+  return out;
+}
+
+/**
+ * Paths in the project with the name of one that doesn't exist (the model dropped a parent
+ * folder: "inspire-africa-community-vault" for inspire_africa/inspire-africa-community-vault).
+ */
+export async function similarPaths(cwd: string, missing: string, kind: "file" | "folder"): Promise<string[]> {
+  const name = path.basename(missing.replace(/[\\/]+$/, "")).toLowerCase();
+  if (!name || name === "." || name === "..") return [];
+  const found: string[] = [];
+  for (const { rel, entries } of await walkDirs(cwd, 5)) {
+    if (kind === "folder" && path.basename(rel).toLowerCase() === name) found.push(rel);
+    if (kind === "file") for (const e of entries) if (e.isFile() && e.name.toLowerCase() === name) found.push(path.join(rel, e.name));
+    if (found.length >= 3) break;
+  }
+  return found;
+}
+
+/** " Did you mean a/b?" / " Did you mean one of: a/b, c/b?" / "" */
+export function didYouMean(paths: string[]): string {
+  if (!paths.length) return "";
+  return paths.length === 1 ? ` Did you mean ${paths[0]}?` : ` Did you mean one of: ${paths.join(", ")}?`;
+}

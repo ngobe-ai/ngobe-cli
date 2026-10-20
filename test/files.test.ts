@@ -113,4 +113,28 @@ describe("project_overview", () => {
     expect(await projectOverview.run({ path: "hype" }, { cwd: root })).toContain("A music player");
     await expect(projectOverview.run({ path: "../" }, { cwd: root })).rejects.toThrow();
   });
+
+  test("a project's latest commits: where the work stopped", async () => {
+    const root = tmpDir();
+    flutterApp(root);
+    const commit = (msg: string, file: string) => {
+      write(root, { [file]: msg });
+      execFileSync("git", ["add", file], { cwd: root });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg], { cwd: root });
+    };
+    commit("Add the player", "lib/services/player.dart");
+    commit("The landing hero speaks the HOME text", "lib/screens/home.dart");
+    const out = await projectOverview.run({}, { cwd: root });
+    expect(out).toMatch(/Latest commits[^\n]*\n?.*The landing hero speaks the HOME text.*Add the player/s);
+  });
+
+  // Seen live: the model asked for "inspire-africa-community-vault" (it is inspire_africa/…), was
+  // told "not a folder", said "Let's try again with the correct folder name" and never found it.
+  test("a folder that isn't there: the ones with that name are suggested", async () => {
+    const root = tmpDir();
+    write(root, { "inspire_africa/inspire-africa-community-vault/package.json": "{}", "inspire_africa/inspire-readiness/package.json": "{}" });
+    await expect(projectOverview.run({ path: "inspire-africa-community-vault" }, { cwd: root })).rejects.toThrow(
+      "Did you mean inspire_africa/inspire-africa-community-vault?",
+    );
+  });
 });

@@ -87,6 +87,25 @@ describe("documents", () => {
     expect(out).toContain("Owner\tBruno");
   });
 
+  // Seen live: a 437-paragraph site map, cut by the 6,400-character output cap (32k context
+  // budget) to its first and last 3,200 characters; the model never saw most sections.
+  test("a long document is paged within the output budget, with the headings further on", async () => {
+    const para = (t: string) => `<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
+    const sections = ["HOME", "FIRST STEP", "MY PROFILE", "COACHING PAGE", "READINESS (chargeable)"];
+    const body = sections.map((s) => para(s) + Array.from({ length: 80 }, (_, i) => para(`${s.toLowerCase()} detail ${i}: a sentence of about sixty characters, give or take.`)).join("")).join("");
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, "Site map.docx"), zip({ "[Content_Types].xml": "<Types/>", "word/document.xml": `<w:document xmlns:w="w"><w:body>${body}</w:body></w:document>` }));
+    const config = testConfig({ cwd: dir, maxContextChars: 32_000 });
+    const out = await readFile.run({ path: "Site map.docx" }, { cwd: dir, config });
+    expect(out.length).toBeLessThanOrEqual(6_400); // what the agent keeps of a tool result at this budget
+    expect(out).not.toContain("characters truncated");
+    expect(out).toMatch(/continue with offset=\d+/);
+    expect(out).toMatch(/Headings further on: .*\d+ COACHING PAGE.*\d+ READINESS \(chargeable\)/);
+    const next = Number(/offset=(\d+)/.exec(out)![1]);
+    const lines = out.split("\n").filter((l) => /^\s*\d+\t/.test(l));
+    expect(Number(lines.at(-1)!.trim().split("\t")[0])).toBe(next - 1); // ends on a whole line
+  });
+
   test("Excel (.xlsx): sheets as rows, shared strings resolved", async () => {
     const out = await extract(
       "sales.xlsx",

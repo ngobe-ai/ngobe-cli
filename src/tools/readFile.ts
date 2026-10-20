@@ -3,7 +3,8 @@ import { extractDocument, human, MAX_LOAD } from "../documents.js";
 import type { Tool } from "../types.js";
 import { describeImage } from "../vision.js";
 import { wantsUi } from "../design.js";
-import { hashText, isOutsideProject, isSecretPath, mentionsPath, optInt, reqStr, resolveReadable } from "./util.js";
+import { toolOutputLimit } from "../context.js";
+import { didYouMean, hashText, isOutsideProject, isSecretPath, mentionsPath, optInt, reqStr, resolveReadable, similarPaths } from "./util.js";
 
 const MAX_LINE = 2000;
 
@@ -50,7 +51,10 @@ export const readFile: Tool = {
     const shown = reqStr(args, "path");
     const abs = resolveReadable(ctx.cwd, shown);
     const stat = await fs.stat(abs).catch(() => null);
-    if (!stat) throw new Error(`${shown} does not exist. Use glob to find the right path.`);
+    if (!stat) {
+      const similar = isOutsideProject(ctx.cwd, shown) ? [] : await similarPaths(ctx.cwd, shown, "file");
+      throw new Error(`${shown} does not exist.${didYouMean(similar) || " Use glob to find the right path."}`);
+    }
     if (stat.isDirectory()) throw new Error(`${shown} is a directory. Use project_overview or glob (e.g. "${shown.replace(/\/$/, "")}/*") to look inside.`);
     // A huge file (a video, a disk image) is identified from its start, never loaded whole.
     const buf = stat.size > MAX_LOAD ? await readStart(abs, MAX_LOAD) : await fs.readFile(abs);
@@ -74,15 +78,48 @@ export const readFile: Tool = {
     // Default page size follows the context budget (200 lines at 32k characters).
     const limit = optInt(args, "limit") ?? (ctx.config ? Math.min(500, Math.max(100, Math.floor(ctx.config.maxContextChars / 160))) : 500);
     if (start > lines.length) throw new Error(`${shown} has only ${lines.length} lines; offset ${start} is past the end.`);
-    const slice = lines.slice(start - 1, start - 1 + limit);
-    const body = slice
-      .map((l, i) => `${String(start + i).padStart(6)}\t${l.length > MAX_LINE ? `${l.slice(0, MAX_LINE)}… [line truncated]` : l}`)
-      .join("\n");
-    const end = start - 1 + slice.length;
-    const more = end < lines.length ? `\n[${lines.length} lines total; continue with offset=${end + 1}]` : "";
-    return `${header ? `${header}\n` : ""}${body}${more}`;
+    // The page also ends on a whole line before the agent's cap on a tool result, which would cut
+    // the middle out (seen live: a site map kept only its first and last 3,200 characters).
+    const budget = toolOutputLimit(ctx.config?.maxContextChars ?? 100_000) - header.length - (doc ? OUTLINE_RESERVE : 100);
+    const numbered: string[] = [];
+    let used = 0;
+    for (let i = start - 1; i < lines.length && numbered.length < limit; i++) {
+      const l = lines[i];
+      const row = `${String(i + 1).padStart(6)}\t${l.length > MAX_LINE ? `${l.slice(0, MAX_LINE)}… [line truncated]` : l}`;
+      if (numbered.length && used + row.length + 1 > budget) break;
+      numbered.push(row);
+      used += row.length + 1;
+    }
+    const end = start - 1 + numbered.length;
+    let more = end < lines.length ? `\n[${lines.length} lines total; continue with offset=${end + 1}]` : "";
+    if (doc && end < lines.length) more += outline(lines, end);
+    return `${header ? `${header}\n` : ""}${numbered.join("\n")}${more}`;
   },
 };
+
+const OUTLINE_RESERVE = 1_000;
+
+/**
+ * "[Headings further on: 160 MY PROFILE · 429 READINESS (chargeable)]": where to page to in a
+ * long document. Headings are short lines in capitals, or Markdown headings.
+ */
+function outline(lines: string[], after: number): string {
+  const found: string[] = [];
+  let size = 0;
+  for (let i = after; i < lines.length; i++) {
+    const l = lines[i].trim();
+    const heading = l.length >= 3 && l.length <= 70 && (/^#{1,6}\s/.test(l) || (/[A-Z].*[A-Z].*[A-Z]/.test(l) && !/[a-z]{2}/.test(l.replace(/\([^)]*\)/g, ""))));
+    if (!heading) continue;
+    const entry = `${i + 1} ${l.replace(/^#+\s*/, "")}`;
+    if (size + entry.length + 3 > OUTLINE_RESERVE - 40) {
+      found.push("…");
+      break;
+    }
+    found.push(entry);
+    size += entry.length + 3;
+  }
+  return found.length ? `\n[Headings further on: ${found.join(" · ")}]` : "";
+}
 
 async function readStart(file: string, bytes: number): Promise<Buffer> {
   const handle = await fs.open(file, "r");

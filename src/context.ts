@@ -12,6 +12,11 @@ export function truncate(s: string, max = 20_000): string {
   return `${s.slice(0, half)}\n\n... [${s.length - max} characters truncated] ...\n\n${s.slice(-half)}`;
 }
 
+/** What is kept of one tool result (characters): re-read every later turn, so a share of the budget. */
+export function toolOutputLimit(maxContextChars: number): number {
+  return Math.min(20_000, Math.max(2_000, Math.floor(maxContextChars / 5)));
+}
+
 export async function loadProjectInstructions(cwd: string): Promise<string> {
   try {
     return await fs.readFile(path.join(cwd, "AGENTS.md"), "utf8");
@@ -26,6 +31,7 @@ export const DEFAULT_WORKING_INSTRUCTIONS = `- To get to know a project or folde
 - Keep changes small, in the project's style. Verify with the tests or build (bash); report passed, failed or not run.
 - Tools run the moment you call them and you get their results: never ask the user to run one, never write a call as text.
 - A reply without a tool call ends your turn: while work remains, include the next tool call in the reply. No numbered plans.
+- Before saying something isn't known or isn't there, look for it (glob, grep, project_overview). For progress (what's done, where work stopped), check the code and its latest commits, not only documents.
 - When done, answer briefly, without tool calls: a few lines or bullets, under ~150 words unless the user asks for detail. Never list files one by one.`;
 
 const MODE_LINES: Record<Mode, string> = {
@@ -69,7 +75,7 @@ export function buildSystemPrompt(p: PromptInput): string {
   const infoTools = ["check_latest_version", "check_installed_version", "get_release_notes", "search_security_advisories", "search_docs", "web_search", "fetch_url"].filter(has);
 
   const sections = [
-    "You are Ngobe, a coding agent in the user's terminal and project. The first message gives the session context: folder, mode and project.",
+    "You are Ngobe, a coding agent in the user's terminal and project. The first user message opens with the session context: folder, mode and project.",
     `How to work:\n${p.workingInstructions?.trim() || DEFAULT_WORKING_INSTRUCTIONS}`,
   ];
   if (infoTools.length) {
