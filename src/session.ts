@@ -13,6 +13,8 @@ import { buildTools } from "./tools/index.js";
 import type { Tool } from "./types.js";
 import type { Ui } from "./ui.js";
 import { ProjectMemory } from "./projectMemory.js";
+import type { McpManager } from "./mcp/index.js";
+import { isTrusted } from "./trust.js";
 
 export interface Session {
   agent: Agent;
@@ -27,6 +29,8 @@ export interface Session {
   perms: Permissions;
   /** NGOBE.md and the record of the latest work per project (null when memory is off). */
   projectMemory: ProjectMemory | null;
+  /** The MCP servers and their tools (null when MCP is off); close() stops them. */
+  mcp: McpManager | null;
 }
 
 export interface SessionOptions {
@@ -35,6 +39,8 @@ export interface SessionOptions {
   memory?: Memory | null;
   /** Use these working instructions instead of the promoted variant (benchmarks). */
   variant?: { name: string; prompt: string };
+  /** false: no MCP servers (benchmarks compare prompts, not the user's servers). */
+  mcp?: boolean;
 }
 
 /** Wire up everything one agent session needs. */
@@ -44,8 +50,16 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
   const variant = opts.variant ?? (active ? { name: active, prompt: memory?.variant(active)?.prompt ?? "" } : { name: "default", prompt: "" });
 
   const agents = loadAgents(config.cwd, path.dirname(configFilePath()));
-  const tools = buildTools(config, { memory: !!memory?.enabled, agents });
-  const [project, instructions, topLevel] = await Promise.all([detectProject(config.cwd), loadProjectInstructions(config.cwd), topLevelEntries(config.cwd)]);
+  const log = new AuditLog(config.stateDir, crypto.randomUUID().slice(0, 8), config.debug ? (l) => ui.info(l) : null);
+  // MCP servers start alongside the project scan; their tools go last, in a fixed order, so the
+  // tool list (part of the prompt prefix the model server caches) stays the same between sessions.
+  const startMcp = async () => {
+    if (opts.mcp === false || !config.mcp) return null;
+    const { McpManager } = await import("./mcp/index.js");
+    return McpManager.start(config, { trusted: isTrusted(config.cwd, config.stateDir), log: (e, d) => log.event(e, d), warn: (t) => ui.warn(t) });
+  };
+  const [project, instructions, topLevel, mcp] = await Promise.all([detectProject(config.cwd), loadProjectInstructions(config.cwd), topLevelEntries(config.cwd), startMcp()]);
+  const tools = [...buildTools(config, { memory: !!memory?.enabled, agents }), ...(mcp?.tools ?? [])];
 
   let notes: string[] = [];
   let failures: string[] = [];
@@ -62,7 +76,6 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
 
   const llm = new LLM(config);
   llm.onNotice = (t) => ui.info(t);
-  const log = new AuditLog(config.stateDir, crypto.randomUUID().slice(0, 8), config.debug ? (l) => ui.info(l) : null);
   // The system prompt is the same in every folder and mode, so the server keeps it (and the tools)
   // cached across sessions; what is particular to this one goes in the session context after them.
   const systemPrompt = buildSystemPrompt({ tools, workingInstructions: variant.prompt || undefined });
@@ -94,5 +107,5 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
     stack: project.stack,
     variant: variant.name,
   });
-  return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms, projectMemory };
+  return { agent, llm, memory, tools, project, log, variant: variant.name, agents, perms, projectMemory, mcp };
 }

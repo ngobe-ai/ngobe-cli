@@ -149,7 +149,7 @@ export async function runTask(task: BenchTask, base: Config, variant: { name: st
     const protectedHashes = task.check.type === "tests_pass" ? hashFiles(cwd, task.check.protect) : null;
     const config: Config = { ...base, ...task.config, cwd, mode: task.mode, memory: false };
     const ui = new RecordingUi();
-    const { agent } = await createSession(config, ui, { memory: null, variant, command: "benchmark" });
+    const { agent } = await createSession(config, ui, { memory: null, variant, command: "benchmark", mcp: false });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), (task.timeoutSeconds ?? 900) * 1000);
     let run: RunResult;
