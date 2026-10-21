@@ -82,6 +82,8 @@ describe("agent loop", () => {
     expect(result.outcome).toBe("limit");
     expect(result.stats.turns).toBe(3);
     expect(log.notes.join()).toContain("3 turns");
+    // A long build on a CPU server can hit a limit: say how to go on.
+    expect(log.notes.join()).toContain('Say "continue" to pick up where it stopped');
   });
 
   test("stops at the tool-call limit", async () => {

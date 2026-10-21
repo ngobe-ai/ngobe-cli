@@ -127,6 +127,8 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 }
 
 const PARALLEL = 4; // concurrent read-only tool calls
+// Big builds on a CPU server can outlast a limit; the work so far is kept (NGOBE.md records it).
+const GO_ON = 'Say "continue" to pick up where it stopped, or raise the limit in config.json for big builds.';
 const LOADING = "Loading the model on the server";
 const MAX_NUDGES = 2;
 const NUDGE = "Continue: make the tool call now, in this reply. A reply without a tool call ends your turn.";
@@ -599,12 +601,12 @@ export class Agent {
       for (;;) {
         if (stats.turns >= config.maxTurns) {
           result.outcome = "limit";
-          ui.warn(`Stopped after ${config.maxTurns} turns (NGOBE_MAX_TURNS).`);
+          ui.warn(`Stopped after ${config.maxTurns} turns (maxTurns, NGOBE_MAX_TURNS). ${GO_ON}`);
           break;
         }
         if (Date.now() - started > config.maxRunSeconds * 1000) {
           result.outcome = "limit";
-          ui.warn(`Stopped: the run took longer than ${config.maxRunSeconds}s (NGOBE_MAX_RUN_SECONDS).`);
+          ui.warn(`Stopped: the run took longer than ${config.maxRunSeconds}s (maxRunSeconds, NGOBE_MAX_RUN_SECONDS). ${GO_ON}`);
           break;
         }
         trimHistory(this.messages, config.maxContextChars);

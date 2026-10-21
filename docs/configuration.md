@@ -54,7 +54,7 @@ Ngobe opens `ssh -N -L …` on the first model request, reuses a tunnel that's a
 | `NGOBE_MODE` / `--mode` | `mode` | `edit` | `ask`, `plan`, `edit`, `auto` (see README) |
 | `NGOBE_MAX_TURNS` | `maxTurns` | `40` | Model calls per request |
 | `NGOBE_MAX_TOOL_CALLS` | `maxToolCalls` | `100` | Tool calls per request |
-| `NGOBE_MAX_RUN_SECONDS` | `maxRunSeconds` | `1800` | Wall-clock limit per request |
+| `NGOBE_MAX_RUN_SECONDS` | `maxRunSeconds` | `1800` | Wall-clock limit per request. A 7B on a CPU writes ~3–5 tokens/s, so building a whole page or project can take hours: raise it (e.g. `14400`) for big builds. When a limit stops a run, "continue" picks up where it stopped |
 | `NGOBE_MAX_CONTEXT_CHARS` | `maxContextChars` | `200000` | History budget before old tool output is blanked and older requests are summarized. Fit it to the model's context window (below) |
 
 Context sizing: each request carries ~2,700 tokens of tool definitions and system prompt. At roughly 4 characters per token, leave that out of the model's context window:
