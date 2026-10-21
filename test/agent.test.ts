@@ -735,6 +735,43 @@ describe("agent loop", () => {
     expect(log.notes.join("\n")).toContain(`Now working in ${path.join(start, "site")}`);
   });
 
+  // Seen live: create_project then "cd web-page-project" and a Tailwind 3 install in the same turn,
+  // planned before the agent had moved into the new folder: the cd failed, the install was refused.
+  test("calls after the working folder changed in the same turn are not run: the model plans again from the result", async () => {
+    const { shell } = projectTools();
+    const create: Tool = {
+      name: "create_project",
+      description: "x",
+      parameters: { type: "object", properties: { framework: { type: "string" }, name: { type: "string" } }, required: ["framework", "name"] },
+      risk: "exec",
+      run: async (args, ctx: ToolContext) => {
+        const dir = path.join(ctx.cwd, String(args.name));
+        fs.mkdirSync(dir);
+        ctx.enterProject?.(dir, []);
+        return "Created web/: Tailwind CSS 4 is set up";
+      },
+    };
+    const { agent, model } = setup(
+      [
+        {
+          toolCalls: [
+            { name: "create_project", arguments: '{"framework": "nextjs", "name": "web"}' },
+            { name: "bash", arguments: '{"command": "cd web"}' },
+            { name: "bash", arguments: '{"command": "npm install tailwindcss postcss autoprefixer"}' },
+          ],
+        },
+        { content: "Done." },
+      ],
+      [create, shell.tool],
+    );
+    const result = await agent.run("create a new nextjs app", new AbortController().signal);
+    expect(shell.calls).toEqual([]);
+    expect(result.outcome).toBe("completed");
+    const results = (model.requests[1].messages as Message[]).filter((m) => m.role === "tool").map((m) => m.content as string);
+    expect(results[0]).toContain("Tailwind CSS 4 is set up");
+    expect(results[1]).toMatch(/^Not run: the working folder is now .*web\/?.*plan the next step/);
+  });
+
   test("a dragged-in macOS screenshot path is found: escaped spaces and the narrow no-break space before AM", () => {
     const dir = tmpDir();
     const name = "WhatsApp Image 2026-10-21 at 10.52.21 AM.jpeg";

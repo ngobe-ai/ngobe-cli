@@ -830,9 +830,16 @@ export class Agent {
       };
       await Promise.all(Array.from({ length: Math.min(PARALLEL, prepared.length) }, worker));
     } else {
+      // A call that moved the working folder (create_project) makes the rest of the turn stale: it
+      // was planned from the old folder (seen live: "cd web-page-project" failed right after).
+      const startedIn = this.d.config.cwd;
       for (let i = 0; i < prepared.length; i++) {
         if (signal.aborted || declined) {
           outputs[i] = signal.aborted ? "Cancelled by user." : "Not run: the user declined an earlier action.";
+          continue;
+        }
+        if (this.d.config.cwd !== startedIn) {
+          outputs[i] = `Not run: the working folder is now ${this.d.config.cwd}, so plan the next step from the result above.`;
           continue;
         }
         const r = await this.execute(prepared[i], signal, runId, result, true, repeats);
