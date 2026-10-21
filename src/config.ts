@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import net from "node:net";
 import { parseArgs } from "node:util";
+import { redactServers } from "./mcp/config.js";
 
 export type Mode = "ask" | "plan" | "edit" | "auto";
 export const MODES: readonly Mode[] = ["ask", "plan", "edit", "auto"];
@@ -62,6 +63,14 @@ export interface Config {
   githubToken: string;
   /** Extra official documentation domains per technology, merged over the built-in list. */
   docs: Record<string, string[]>;
+  /** Use MCP servers (NGOBE_MCP=0: none). */
+  mcp: boolean;
+  /** "mcpServers" from the user's config file (Claude Code's format); .mcp.json adds the project's. */
+  mcpServers: Record<string, unknown>;
+  /** Seconds an MCP server has to start and answer. */
+  mcpTimeout: number;
+  /** Seconds one MCP tool call may take. */
+  mcpToolTimeout: number;
   debug: boolean;
 }
 
@@ -84,6 +93,7 @@ export const COMMANDS = [
   "config",
   "update",
   "upgrade",
+  "mcp",
 ] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -118,6 +128,10 @@ Direct commands (no model needed):
                          run the evaluation set against the configured model
   doctor                 check model endpoint, tools, search, memory and system resources
   config                 show the effective configuration (secrets redacted)
+  mcp [list|get <name>|add|remove <name>]
+                         MCP servers: list them with their status, or add one (Claude Code's format):
+                           ngobe mcp add [-s user|project] [-e KEY=value] fs -- npx -y @modelcontextprotocol/server-filesystem .
+                           ngobe mcp add -t http [-H "Authorization: Bearer \${TOKEN}"] docs https://example.com/mcp
   upgrade                update ngobe to the latest release (Homebrew, npm or the standalone binary; also: update)
 
 Options:
@@ -127,6 +141,10 @@ Options:
       --yolo             deprecated alias for --mode auto (dangerous commands still ask)
       --ecosystem <eco>  for "version"
       --json             machine-readable output for direct commands
+  -s, --scope <scope>    for "mcp add/remove": user (config.json, default) or project (.mcp.json)
+  -t, --transport <t>    for "mcp add": stdio (default), http or sse
+  -e, --env <K=V>        for "mcp add": environment for a stdio server (repeatable)
+  -H, --header <h>       for "mcp add": "Name: value" header for an HTTP server (repeatable)
   -y, --yes              skip the confirmation for "memory clear"
       --debug            log tool selection and timings to stderr
   -v, --version          print the ngobe version
@@ -139,6 +157,7 @@ Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
   NGOBE_VISION_MODEL (describes images), NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
+  NGOBE_MCP (0 = no MCP servers), NGOBE_MCP_TIMEOUT (startup seconds, default 30), NGOBE_MCP_TOOL_TIMEOUT (seconds, default 120),
   BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, NGOBE_SEARXNG_KEY, GITHUB_TOKEN, NGOBE_DEBUG
 Config file: $XDG_CONFIG_HOME/ngobe/config.json (default ~/.config/ngobe/config.json).
 Secrets (API keys, tokens) are read from the environment only.`;
@@ -235,6 +254,11 @@ export interface LoadedConfig {
   json: boolean;
   /** --yes: confirm destructive direct commands (memory clear) without a prompt. */
   yes: boolean;
+  /** ngobe mcp add/remove: --scope, --transport, --env K=V…, --header "K: V"… */
+  scope: string;
+  transport: string;
+  env: string[];
+  headers: string[];
   ecosystem: string;
   variant: string;
   task: string;
@@ -255,6 +279,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
       task: { type: "string" },
       json: { type: "boolean" },
       yes: { type: "boolean", short: "y" },
+      scope: { type: "string", short: "s" },
+      transport: { type: "string", short: "t" },
+      env: { type: "string", short: "e", multiple: true },
+      header: { type: "string", short: "H", multiple: true },
       debug: { type: "boolean" },
       version: { type: "boolean", short: "v" },
       help: { type: "boolean", short: "h" },
@@ -330,6 +358,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     searxngKey,
     githubToken: env.GITHUB_TOKEN ?? env.GH_TOKEN ?? "",
     docs: (file.docs as Record<string, string[]>) ?? {},
+    mcp: bool(setting("MCP", "mcp").raw, true),
+    mcpServers: file.mcpServers && typeof file.mcpServers === "object" && !Array.isArray(file.mcpServers) ? (file.mcpServers as Record<string, unknown>) : {},
+    mcpTimeout: int(setting("MCP_TIMEOUT", "mcpTimeout"), 30),
+    mcpToolTimeout: int(setting("MCP_TOOL_TIMEOUT", "mcpToolTimeout"), 120),
     debug: bool(values.debug ?? envVar(env, "DEBUG") ?? file.debug, false),
   };
   if (values.yolo) warnings.push("--yolo is deprecated: it now means --mode auto, and dangerous commands still ask");
@@ -344,6 +376,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     prompt: args.join(" ").trim(),
     json: values.json ?? false,
     yes: values.yes ?? false,
+    scope: values.scope ?? "",
+    transport: values.transport ?? "",
+    env: values.env ?? [],
+    headers: values.header ?? [],
     ecosystem: values.ecosystem ?? "",
     variant: values.variant ?? "",
     task: values.task ?? "",
@@ -373,6 +409,7 @@ export function redactedConfig(config: Config): Record<string, unknown> {
     const v = out[key];
     if (typeof v === "string" && v && v !== "not-needed") out[key] = `${v.slice(0, 3)}…(${v.length} chars)`;
   }
+  out.mcpServers = redactServers(config.mcpServers);
   return out;
 }
 

@@ -54,6 +54,7 @@ From source (Bun):
 | `ngobe memory [list\|show\|export\|delete\|clear\|disable\|enable]` | Inspect and control learned memory |
 | `ngobe learn [variants\|add\|propose\|promote\|rollback]` | Outcomes, recurring failures, prompt variants |
 | `ngobe benchmark [--variant x] [--task id]` | Run the evaluation set against the configured model |
+| `ngobe mcp [list\|get\|add\|remove]` | MCP servers (Claude Code's format): `ngobe mcp add playwright -- npx -y @playwright/mcp@latest --headless` gives the agent a browser; see [configuration](docs/configuration.md#mcp-servers) |
 | `ngobe doctor`, `ngobe config` | Diagnostics (including whether an update is out); effective configuration (secrets redacted) |
 | `ngobe upgrade` (`update`) | Update to the latest release: runs `brew upgrade` or `npm install -g` for you, or swaps the standalone binary (checksum-verified) |
 
@@ -77,6 +78,7 @@ The first time ngobe opens in a folder it asks whether you trust the files there
 | `/init` | Write `AGENTS.md`, a guide to the project for the agent |
 | `/review [ref]`, `/diff` | Review uncommitted changes; show them |
 | `/status`, `/context`, `/cost`, `/todos`, `/tools`, `/memory`, `/config` | Session, context window, usage, task list, tools, memory, settings |
+| `/mcp` | MCP servers: status, their tools and what they cost in prompt tokens |
 | `/exit` | Quit |
 
 Keys: enter sends, esc interrupts a run, shift+tab cycles the mode, ctrl+v pastes an image from the clipboard (a screenshot) as a file path, ↑/↓ recall history; the mouse wheel, PgUp/PgDn or shift+↑/↓ scroll the conversation while the banner and the prompt stay put. The chat uses the terminal's alternate screen and takes the mouse wheel, so to select text hold Option (macOS) or Shift; `NGOBE_MOUSE=0` leaves the mouse to the terminal.

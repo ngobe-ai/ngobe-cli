@@ -122,6 +122,7 @@ async function runAgent(loaded: LoadedConfig) {
   // One-shot mode: ngobe "fix the failing test"
   if (prompt) {
     await runOnce(prompt);
+    await session.mcp?.close();
     await ui.close();
     memory?.close();
     if (failed) process.exitCode = 1;
@@ -164,6 +165,7 @@ async function runAgent(loaded: LoadedConfig) {
     }
     await runOnce(input);
   }
+  await session.mcp?.close();
   await ui.close();
   memory?.close();
 }

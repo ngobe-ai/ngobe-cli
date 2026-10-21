@@ -5,6 +5,7 @@ import { createAgentFile } from "./agents.js";
 import { configFilePath, redactedConfig, saveSetting, VERSION, type Config, type Mode } from "./config.js";
 import { toolsForMode } from "./permissions.js";
 import { gitDiff, gitStatus } from "./tools/git.js";
+import { statusLine } from "./mcp/index.js";
 import type { Session } from "./session.js";
 import { formatDuration, formatTokens, type Ui } from "./ui.js";
 
@@ -39,6 +40,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "todos", description: "The current todo list" },
   { name: "tools", description: "Tools the agent can use in this mode" },
   { name: "memory", description: "What ngobe remembers about this project" },
+  { name: "mcp", description: "MCP servers: status and the tools they add" },
   { name: "config", description: "Effective settings (secrets hidden) and the config file" },
   { name: "exit", aliases: ["quit"], description: "Quit ngobe" },
 ];
@@ -329,6 +331,24 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
           `NGOBE.md: ${tildePath(config.memoryFile)} (edit it freely; ngobe keeps it up to date)`,
           here || "Nothing in it about this folder yet.",
           ...(facts.length ? ["", `${facts.length} learned facts for this project:`, ...facts.map((f) => `• ${f.kind} ${f.key}: ${f.value} (${f.source})`), "Manage with: ngobe memory list|delete|clear"] : []),
+        ].join("\n"),
+      );
+      return done;
+    }
+
+    case "mcp": {
+      const mcp = session.mcp;
+      if (!mcp) {
+        ui.info(config.mcp ? "No MCP servers in this session." : "MCP is off (NGOBE_MCP=0).");
+        return done;
+      }
+      const lines = mcp.servers.map((s) => `${s.state === "connected" ? "✓" : s.state === "failed" ? "✗" : "-"} ${statusLine(s)}${s.tools.length ? `\n    ${s.tools.join(", ")}` : ""}`);
+      if (mcp.untrusted.length) lines.push(`! not started (folder not trusted): ${mcp.untrusted.join(", ")}`);
+      if (mcp.changed.length) lines.push(`! tool lists changed since the start (restart ngobe to use them): ${mcp.changed.join(", ")}`);
+      ui.info(
+        [
+          ...(lines.length ? lines : ["No MCP servers configured."]),
+          "Add one: ngobe mcp add <name> -- <command> [args…]  or  ngobe mcp add -t http <name> <url>  (then restart ngobe)",
         ].join("\n"),
       );
       return done;

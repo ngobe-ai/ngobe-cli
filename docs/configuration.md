@@ -79,6 +79,40 @@ Context sizing: each request carries ~2,700 tokens of tool definitions and syste
 
 Version, release-note and advisory lookups need no keys. Without a search provider, `web_search` is not offered and `search_docs` falls back to the local index of official pages fetched earlier.
 
+## MCP servers
+
+MCP servers give the agent more tools: a browser to test a web page with, a database, an issue tracker, docs. Ngobe reads them in Claude Code's format, so a project's `.mcp.json` works in both:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless"],
+      "tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_take_screenshot", "browser_console_messages"]
+    },
+    "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] },
+    "github": { "command": "github-mcp-server", "args": ["stdio"], "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" } },
+    "docs": { "type": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" } }
+  }
+}
+```
+
+- **Where**: `mcpServers` in `~/.config/ngobe/config.json` (yours, every folder), and `.mcp.json` at the project root (the project's; it wins over yours for the same name). A `.mcp.json` can start any program, so it is used only in a folder you trust (the first-run question in the chat); one-shot runs in an untrusted folder skip it with a warning.
+- **Add one**: `ngobe mcp add playwright -- npx -y @playwright/mcp@latest --headless`, `ngobe mcp add -t http -H "Authorization: Bearer \${DOCS_TOKEN}" docs https://example.com/mcp`, `-s project` to write `.mcp.json`, `-e KEY=value` for a stdio server's environment. Put `--` before the command so its flags aren't read as ngobe's. `ngobe mcp list` checks each server, `ngobe mcp get <name>` lists its tools, `ngobe mcp remove <name>` deletes it. New sessions pick changes up; `/mcp` shows the session's servers.
+- **Transports**: `stdio` (default when there is a `command`), `http` (Streamable HTTP; default when there is a `url`), `sse` (the deprecated 2024-11-05 HTTP+SSE). An `http` server that turns out to be an old HTTP+SSE one is found by falling back.
+- **Variables**: `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`, `cwd`, `url` and `headers` come from ngobe's environment. A server whose variable isn't set is reported and not started. Programs ngobe starts don't inherit its own credentials (`NGOBE_API_KEY`, `GITHUB_TOKEN`…), so pass what a server needs through its `env`, as with `GITHUB_TOKEN` above. Prefer variables to literal tokens in these files; `ngobe config` and `ngobe mcp get` hide `env` values and credential headers.
+- **Ngobe's extra keys**: `tools: ["browser_navigate", "browser_snapshot"]` offers only those tools; `autoApprove: ["browser_snapshot"]` (or `["*"]`) runs those without asking; `timeout` (startup) and `toolTimeout` (one call) in seconds (numbers over 1000 are milliseconds, like Claude Code's `MCP_TIMEOUT`); `disabled: true`.
+- **Approval**: a tool the server marks read-only (`readOnlyHint`) runs without asking and is offered in ask and plan modes too; one marked destructive asks every time, in every mode; everything else asks in edit mode and runs in auto mode, and "a" (always) covers it for the session. These marks are the server's own claims: add only servers you trust.
+- **Cost on a CPU model**: each tool definition is part of every request and re-read on a cold start (~15–25 tokens/s on the VPS). `ngobe mcp list` shows about how many prompt tokens each server adds. Measured with the lean profile (2026-10-21): Playwright MCP's 25 tools ~3,300 tokens (2–4 minutes of a cold start on the VPS), the six in the example above ~940; server-everything's 22 tools ~1,800. Keep it small with `tools`.
+
+| Variable | Config key | Default | Meaning |
+|---|---|---|---|
+| `NGOBE_MCP` | `mcp` | `1` | `0` starts no MCP servers |
+| `NGOBE_MCP_TIMEOUT` | `mcpTimeout` | `30` | Seconds a server has to start and answer (the first `npx` run downloads the package) |
+| `NGOBE_MCP_TOOL_TIMEOUT` | `mcpToolTimeout` | `120` | Seconds one tool call may take |
+
+Not supported yet: MCP's OAuth sign-in (servers that need it fail with HTTP 401; put a token in `headers` instead), resources and prompts (tools only), sampling, elicitation and roots (ngobe declares none of these, so servers don't ask for them), and tool-list changes during a session (seen at the next start).
+
 ## Memory, logs, cache
 
 | Variable | Config key | Default | Meaning |

@@ -7,6 +7,7 @@ import { LLM, type ModelInfo } from "./llm.js";
 import { Memory } from "./memory/store.js";
 import { latestVersion } from "./releases/versions.js";
 import { buildTools } from "./tools/index.js";
+import { isTrusted } from "./trust.js";
 import { bold, dim, green, red, yellow } from "./ui.js";
 import { httpJson } from "./web/http.js";
 import { updateNotice } from "./update.js";
@@ -99,6 +100,19 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
   const bins = await Promise.all(["git", "rg", "bash"].map(async (b) => [b, await which(b)] as const));
   const tools = buildTools(config, { memory: config.memory });
   console.log(`${bold("tools  ")} ${tools.length} available; ${bins.map(([b, found]) => (found ? ok(b) : b === "rg" ? warn("rg (grep falls back to a slower JS search)") : bad(b))).join("  ")}`);
+
+  // --- MCP servers -------------------------------------------------------------------
+  if (!config.mcp) console.log(`${bold("mcp    ")} ${dim("off (NGOBE_MCP=0)")}`);
+  else {
+    const { connectServer, serversFor, statusLine } = await import("./mcp/index.js");
+    const { specs, untrusted, warnings } = serversFor(config, isTrusted(config.cwd, config.stateDir));
+    for (const w of warnings) console.log(`${bold("mcp    ")} ${warn(w)}`);
+    const results = await Promise.all(specs.map((s) => connectServer(s, { lean: config.toolProfile !== "full" })));
+    await Promise.all(results.map((r) => r.client?.close()));
+    for (const { status } of results) console.log(`${bold("mcp    ")} ${(status.state === "connected" ? ok : status.state === "failed" ? bad : (s: string) => dim(s))(statusLine(status))}`);
+    if (untrusted.length) console.log(`${bold("mcp    ")} ${warn(`.mcp.json servers not used here (folder not trusted): ${untrusted.join(", ")}`)}`);
+    if (!specs.length && !untrusted.length) console.log(`${bold("mcp    ")} ${dim("no servers (ngobe mcp add)")}`);
+  }
 
   // --- search and official sources ----------------------------------------------------
   if (config.searchProviders.length === 0) {
