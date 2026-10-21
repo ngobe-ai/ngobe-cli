@@ -707,7 +707,13 @@ export class Agent {
         if (turn.toolCalls.length === 0) {
           if (nudges < MAX_NUDGES && offered.length && announcesAction(turn.content, stats.toolCalls > 0)) {
             nudges++;
-            this.messages.push({ role: "user", content: NUDGE });
+            // "Let's update `src/app/layout.tsx` …": name the call (seen live, the bare nudge got the
+            // same announcement back twice).
+            const file = byName.has("write_file") ? /`([\w@.+-]+(?:\/[\w@.+-]+)*\.[A-Za-z0-9]{1,6})`/.exec(turn.content)?.[1] : undefined;
+            const content = file
+              ? `Continue: call write_file with {"path": "${file}", "content": "<the complete new file>"} now (edit_file for a small change). A reply without a tool call ends your turn.`
+              : NUDGE;
+            this.messages.push({ role: "user", content });
             this.d.log?.event("nudge", { run: runId, reply: turn.content.slice(0, 120) });
             continue;
           }
@@ -747,7 +753,9 @@ export class Agent {
           // Asked for a change, nothing changed yet: small models describe the fix (or show the
           // code) instead of making it. One nudge to make it.
           const changed = result.calls.some((c) => c.ok && this.d.tools.find((t) => t.name === c.name)?.risk === "write");
-          if (changeWanted && !changeNudged && nudges < MAX_NUDGES && !changed && offered.some((t) => t.risk === "write")) {
+          // Once per request, even after other nudges (seen live: two "go on" nudges used the budget
+          // and the run ended with nothing built).
+          if (changeWanted && !changeNudged && !changed && offered.some((t) => t.risk === "write")) {
             changeNudged = true;
             nudges++;
             this.messages.push({ role: "user", content: CHANGE_NUDGE });

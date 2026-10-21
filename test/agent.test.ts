@@ -774,6 +774,19 @@ describe("agent loop", () => {
     expect(results[1]).toMatch(/^Not run: the working folder is now .*web\/?.*plan the next step/);
   });
 
+  // Seen live after create_project: read layout.tsx, then "Now, let's update `src/app/layout.tsx` …"
+  // three times with no call; the generic nudges used the budget and the run ended with nothing built.
+  test("an announced file change is nudged with the file and tool named; the change nudge still comes", async () => {
+    const { write } = projectTools();
+    const say = "Now, let's update the `src/app/layout.tsx` file with the new layout.";
+    const { agent, model } = setup([{ content: say }, { content: say }, { content: say }, { content: "unused" }], [write.tool]);
+    await agent.run("build the page from the design", new AbortController().signal);
+    const asks = model.requests.slice(1).map((r) => (r.messages as Message[]).at(-1)!.content as string);
+    expect(asks[0]).toContain('write_file with {"path": "src/app/layout.tsx"');
+    expect(asks).toHaveLength(3);
+    expect(asks[2]).toContain("You haven't changed any file yet");
+  });
+
   test("a dragged-in macOS screenshot path is found: escaped spaces and the narrow no-break space before AM", () => {
     const dir = tmpDir();
     const name = "WhatsApp Image 2026-10-21 at 10.52.21 AM.jpeg";

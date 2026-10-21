@@ -91,6 +91,7 @@ describe("create_project", () => {
     expect(out).toContain("npm run build");
     expect(out).toContain("Files: package.json, src/app/globals.css, src/app/page.tsx");
     expect(out).toContain("SOLID and YAGNI");
+    expect(out).toContain("Replace these starter files whole with write_file (no need to read them first): src/app/page.tsx, src/app/globals.css");
     expect(entered).toEqual([{ dir, starter: [path.join(dir, "src/app/page.tsx"), path.join(dir, "src/app/globals.css")] }]);
     expect(ctx.files?.has(path.join(dir, "src/app/page.tsx"))).toBe(true);
   });

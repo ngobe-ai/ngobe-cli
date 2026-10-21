@@ -606,6 +606,7 @@ export const createProject: Tool = {
         : `Created ${name}/ with git (no generator is known for "${asked}"). The working folder is now ${name}/: write the project's files yourself: its manifest or build file first, then the code, a README saying how to build and run it, and a .gitignore.`,
       install,
       g ? g.notes(o) : "",
+      starter.length ? `Replace these starter files whole with write_file (no need to read them first): ${starter.map((f) => path.relative(dir, f)).join(", ")}.` : "",
       files.length ? `Files: ${files.join(", ")}` : "",
       PRINCIPLES,
     ]

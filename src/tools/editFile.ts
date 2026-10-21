@@ -34,7 +34,11 @@ async function applyEdits(path: string, edits: Replacement[], ctx: ToolContext):
     if (oldStr === "") throw new Error(`${label}old_string is empty. To create a file, use write_file.`);
     if (oldStr === newStr) throw new Error(`${label}old_string and new_string are the same; nothing would change.`);
     const count = text.split(oldStr).length - 1;
-    if (count === 0) throw new Error(`${label}old_string was not found in ${path}. Re-read the file and copy the text exactly, including indentation.`);
+    if (count === 0) {
+      // A whole new file as new_string, with a made-up old_string (seen live on a starter file).
+      const whole = e.new_string.split("\n").length >= 10 ? " To replace the whole file, call write_file with its complete new content." : "";
+      throw new Error(`${label}old_string was not found in ${path}. Re-read the file and copy the text exactly, including indentation.${whole}`);
+    }
     if (count > 1 && !e.replace_all) {
       throw new Error(`${label}old_string matches ${count} places in ${path}. Add surrounding lines to make it unique, or set replace_all to change every one.`);
     }

@@ -114,6 +114,20 @@ describe("edit_file", () => {
   });
 });
 
+describe("edit_file, a whole file in new_string", () => {
+  // Seen live: the 7B "edited" layout.tsx with a made-up old_string and the whole new file.
+  test("an old_string that isn't there, with a whole file as new_string, points to write_file", async () => {
+    const file = path.join(dir, "project/src/layout.tsx");
+    await fs.writeFile(file, "export default function RootLayout() {\n  return null;\n}\n");
+    const whole = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+    await expect(editFile.run({ path: "src/layout.tsx", old_string: "// This is the root layout file", new_string: whole }, ctx())).rejects.toThrow(
+      "To replace the whole file, call write_file with its complete new content.",
+    );
+    // A small edit gets the usual advice only.
+    await expect(editFile.run({ path: "src/layout.tsx", old_string: "missing", new_string: "x" }, ctx())).rejects.not.toThrow("write_file");
+  });
+});
+
 describe("multi_edit", () => {
   test("applies every edit, or none when one fails", async () => {
     const file = path.join(dir, "project/src/a.ts");
