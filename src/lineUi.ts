@@ -1,9 +1,26 @@
 import * as readline from "node:readline/promises";
 import chalk from "chalk";
+import { AGENT_COLORS } from "./agents.js";
 import { highlight } from "./diff.js";
 import { mdLine, type MdState } from "./markdown.js";
 import type { PreviewLine, Todo, ToolView } from "./types.js";
-import { bold, cyan, dim, formatDuration, formatTokens, green, red, runDoneLine, yellow, type Activity, type RunSummary, type Ui } from "./ui.js";
+import {
+  bold,
+  cyan,
+  dim,
+  formatDuration,
+  formatTokens,
+  green,
+  red,
+  runDoneLine,
+  yellow,
+  type Activity,
+  type InputRequest,
+  type RunSummary,
+  type SelectAnswer,
+  type SelectRequest,
+  type Ui,
+} from "./ui.js";
 
 const SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 const PREVIEW_LINES = 8;
@@ -14,7 +31,8 @@ const DOT: Record<ToolView["state"], (s: string) => string> = { running: dim, ok
 
 /** "⏺ Read(src/a.ts)" and its "⎿ summary" / preview lines, as printed when the call finishes. */
 export function toolLines(v: ToolView, width = 100): string[] {
-  const head = `${DOT[v.state]("⏺")} ${bold(v.label)}${v.target ? dim(`(${clip(v.target, width - v.label.length - 6)})`) : ""}`;
+  const color = v.color ? AGENT_COLORS[v.color] : undefined;
+  const head = `${DOT[v.state]("⏺")} ${color ? chalk.hex(color).bold(v.label) : bold(v.label)}${v.target ? dim(`(${clip(v.target, width - v.label.length - 6)})`) : ""}`;
   const lines = [head];
   if (v.summary) lines.push(`  ${dim("⎿")}  ${v.state === "error" ? red(v.summary) : v.state === "declined" ? yellow(v.summary) : dim(v.summary)}`);
   const preview = v.preview ?? [];
@@ -76,6 +94,34 @@ export class LineUi implements Ui {
       return Promise.resolve("n");
     }
     return this.rl.question(`  ${prompt} [y/n/a] `);
+  }
+  /** A numbered list; the answer is typed: "2", "2s" (the alt key), "1 3 4" when several may be checked. */
+  async select(req: SelectRequest): Promise<SelectAnswer | null> {
+    if (!this.canConfirm) return null;
+    this.print(
+      [
+        bold(req.title),
+        ...req.options.map((o, i) => `  ${req.multi ? (o.checked ? "[x] " : "[ ] ") : ""}${i + 1}. ${o.label}${o.description ? dim(`  ${o.description}`) : ""}`),
+      ].join("\n"),
+    );
+    const initial = (req.initial ?? 0) + 1;
+    const how = req.multi ? "numbers to check, e.g. 1 3 (enter keeps the checked ones)" : `a number (enter = ${initial}${req.alt ? `; add ${req.alt.key} for ${req.alt.label}` : ""})`;
+    const answer = (await this.rl.question(`  ${how}, q to cancel: `)).trim().toLowerCase();
+    if (answer === "q") return null;
+    const alt = !!req.alt && answer.endsWith(req.alt.key);
+    const picked = (alt ? answer.slice(0, -req.alt!.key.length) : answer)
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map((n) => req.options[Number(n) - 1]?.value)
+      .filter((v): v is string => v !== undefined);
+    if (req.multi) return { values: answer ? picked : req.options.filter((o) => o.checked).map((o) => o.value), alt: false };
+    const value = answer && answer !== req.alt?.key ? picked[0] : req.options[initial - 1]?.value;
+    return value === undefined ? null : { values: [value], alt };
+  }
+  async input(req: InputRequest): Promise<string | null> {
+    if (!this.canConfirm) return null;
+    const text = (await this.rl.question(`${bold(req.title)}${req.placeholder ? dim(` (${req.placeholder})`) : ""}\n  `)).trim();
+    return text || null;
   }
   onInterrupt(cb: () => boolean) {
     this.rl.on("SIGINT", () => {

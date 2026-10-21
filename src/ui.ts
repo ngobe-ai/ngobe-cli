@@ -56,6 +56,37 @@ export function runDoneLine(s: RunSummary): string {
   return `${verb} ${formatDuration(s.ms)} · ${formatTokens(s.tokens)} tokens${calls}`;
 }
 
+export interface SelectOption {
+  value: string;
+  label: string;
+  /** One line after the label, dimmed. */
+  description?: string;
+  /** Multi-select: checked at the start. */
+  checked?: boolean;
+}
+
+export interface SelectRequest {
+  title: string;
+  options: SelectOption[];
+  /** Several may be checked (space toggles); the answer lists the checked values. */
+  multi?: boolean;
+  /** The option the cursor starts on. */
+  initial?: number;
+  /** A second key that also chooses, and what it means: /model's "s" for this session only. */
+  alt?: { key: string; label: string };
+}
+
+/** The chosen value (or the checked ones), and whether the alt key chose it. */
+export interface SelectAnswer {
+  values: string[];
+  alt: boolean;
+}
+
+export interface InputRequest {
+  title: string;
+  placeholder?: string;
+}
+
 /**
  * Everything the agent needs from the terminal. Two implementations:
  * LineUi (plain scrolling output, one-shot mode) and the ink TUI in src/tui (REPL mode).
@@ -94,6 +125,10 @@ export interface Ui {
   onTyping?(cb: () => void): void;
   /** First run in a folder: does the user trust it? Resolves false to quit. */
   trust?(dir: string): Promise<boolean>;
+  /** A menu (/agents, /model); null when the user cancels (esc). Without it, commands take text arguments. */
+  select?(req: SelectRequest): Promise<SelectAnswer | null>;
+  /** A line of text (pastes may hold newlines); null when the user cancels. */
+  input?(req: InputRequest): Promise<string | null>;
   onInterrupt(cb: () => boolean): void;
   close(): void | Promise<void>;
 }

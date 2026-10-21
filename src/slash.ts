@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { childEnv } from "./childEnv.js";
 import path from "node:path";
 import { createAgentFile } from "./agents.js";
+import { agentsMenu, reloadAgents, type Menus } from "./agentWizard.js";
+import { describeModel, type ModelInfo } from "./llm.js";
 import { configFilePath, redactedConfig, saveSetting, VERSION, type Config, type Mode } from "./config.js";
 import { toolsForMode } from "./permissions.js";
 import { gitDiff, gitStatus } from "./tools/git.js";
@@ -27,10 +29,10 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "Commands and keys" },
   { name: "clear", aliases: ["new", "reset"], description: "Start a new conversation (clears context and screen)" },
   { name: "compact", args: "[focus]", description: "Summarize the conversation to free up context" },
-  { name: "model", args: "[name|number]", description: "List the server's models, or switch (saved as default)" },
+  { name: "model", args: "[name|number]", description: "Pick the model (saved as default), or switch to one by name" },
   { name: "mode", args: "[ask|plan|edit|auto]", description: "Show or switch the permission mode (shift+tab cycles)" },
   { name: "permissions", aliases: ["approvals"], description: "What runs without asking; what you allowed this session" },
-  { name: "agents", aliases: ["subagents"], args: "[new <name>]", description: "List sub-agents, or create a custom one" },
+  { name: "agents", aliases: ["subagents"], args: "[new <name>]", description: "Create, edit and delete sub-agents" },
   { name: "init", description: "Write AGENTS.md: a guide to this project for the agent" },
   { name: "review", args: "[git ref]", description: "Review uncommitted changes (or changes since a ref)" },
   { name: "diff", description: "Show uncommitted changes (git diff)" },
@@ -148,11 +150,23 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
     }
 
     case "model": {
-      let models: string[];
+      let infos: ModelInfo[];
       try {
-        models = (await session.llm.models()).map((m) => m.id);
+        infos = await session.llm.models();
       } catch (err) {
         ui.error(`Could not list models: ${err instanceof Error ? err.message : String(err)}`);
+        return done;
+      }
+      const models = infos.map((m) => m.id);
+      // Like Claude Code: a picker; enter switches and saves the default, s switches for this session only.
+      if (!arg && ui.select) {
+        const answer = await ui.select({
+          title: "Select model",
+          options: infos.map((m) => ({ value: m.id, label: `${m.id}${m.id === config.model ? " ✔" : ""}`, description: describeModel(m) })),
+          initial: Math.max(0, models.indexOf(config.model)),
+          alt: { key: "s", label: "this session only" },
+        });
+        if (answer?.values[0]) switchModel(answer.values[0], !answer.alt, env);
         return done;
       }
       if (!arg) {
@@ -173,16 +187,7 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
         ui.warn(`No model matches "${arg}". /model lists them.`);
         return done;
       }
-      config.model = choice; // the LLM client reads it on every request
-      ui.modelChanged?.(choice);
-      let saved = "";
-      try {
-        saved = ` Saved as the default in ${tildePath(saveSetting("model", choice))}.`;
-      } catch (err) {
-        saved = ` (Not saved: ${err instanceof Error ? err.message : String(err)})`;
-      }
-      const envOverride = process.env.NGOBE_MODEL || process.env.MUGAMBA_MODEL ? " NGOBE_MODEL is set in your environment and wins over the saved default." : "";
-      ui.info(`Model: ${choice}.${saved}${envOverride}`);
+      switchModel(choice, true, env);
       return done;
     }
 
@@ -219,10 +224,15 @@ export async function runSlash(line: string, env: SlashEnv): Promise<SlashResult
         const name = rest[1] ?? "";
         try {
           const file = createAgentFile(config.cwd, name);
-          ui.info(`Created ${path.relative(config.cwd, file)}. Edit its description, tools and instructions, then restart ngobe to use it.`);
+          reloadAgents(env);
+          ui.info(`Created ${path.relative(config.cwd, file)}. Edit its description, tools and instructions (or use /agents); changes apply to the next task.`);
         } catch (err) {
           ui.warn(err instanceof Error ? err.message : String(err));
         }
+        return done;
+      }
+      if (ui.select && ui.input) {
+        await agentsMenu({ ...env, ui: ui as Menus });
         return done;
       }
       const offered = session.tools.some((t) => t.name === "task");
@@ -375,6 +385,24 @@ export const MODE_HELP: Record<Mode, string> = {
   edit: "Asks before every file change and command.",
   auto: "Low-risk changes and commands run without asking; risky ones still ask.",
 };
+
+/** Use this model from the next request on; saved as the default unless it is for this session only. */
+function switchModel(choice: string, save: boolean, { config, ui }: Pick<SlashEnv, "config" | "ui">): void {
+  config.model = choice; // the LLM client reads it on every request
+  ui.modelChanged?.(choice);
+  if (!save) {
+    ui.info(`Model: ${choice} (this session only).`);
+    return;
+  }
+  let saved = "";
+  try {
+    saved = ` Saved as the default in ${tildePath(saveSetting("model", choice))}.`;
+  } catch (err) {
+    saved = ` (Not saved: ${err instanceof Error ? err.message : String(err)})`;
+  }
+  const envOverride = process.env.NGOBE_MODEL || process.env.MUGAMBA_MODEL ? " NGOBE_MODEL is set in your environment and wins over the saved default." : "";
+  ui.info(`Model: ${choice}.${saved}${envOverride}`);
+}
 
 function chars(n: number): string {
   return `${tok(n)} tokens`;

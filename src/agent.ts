@@ -18,7 +18,7 @@ import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
 import { walkDirs } from "./tools/util.js";
 import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
-import type { AgentDef } from "./agents.js";
+import { agentModel, type AgentDef } from "./agents.js";
 import { printable, type Activity, type Ui } from "./ui.js";
 
 interface AgentDeps {
@@ -1124,7 +1124,7 @@ export class Agent {
       info: (t) => parent.info(tag(t)),
       warn: (t) => parent.warn(tag(t)),
       error: (t) => parent.error(tag(t)),
-      toolUpdate: (v) => parent.toolUpdate({ ...v, id: `${def.name}:${v.id}`, label: tag(v.label) }),
+      toolUpdate: (v) => parent.toolUpdate({ ...v, id: `${def.name}:${v.id}`, label: tag(v.label), color: def.color }),
       activity: (a: Activity | null) => a && parent.activity({ ...a, label: tag(a.label) }),
       todos: () => {},
       runDone: () => {},
@@ -1134,6 +1134,7 @@ export class Agent {
     const tools = this.d.tools.filter((t) => t.name !== "task" && (!def.tools || def.tools.includes(t.name)));
     const sub = new Agent({
       ...this.d,
+      llm: this.d.llm.withModel(agentModel(def, this.d.config.model)),
       tools,
       ui,
       command: `agent:${def.name}`,

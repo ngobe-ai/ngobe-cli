@@ -113,6 +113,32 @@ MCP servers give the agent more tools: a browser to test a web page with, a data
 
 Not supported yet: MCP's OAuth sign-in (servers that need it fail with HTTP 401; put a token in `headers` instead), resources and prompts (tools only), sampling, elicitation and roots (ngobe declares none of these, so servers don't ask for them), and tool-list changes during a session (seen at the next start).
 
+## Sub-agents
+
+`/agents` creates and edits these files for you; you can also write them by hand. One markdown file per agent, in `.ngobe/agents/` (this project), `~/.config/ngobe/agents/` (every project) or `.claude/agents/` (Claude Code's, read as they are). A project file wins over a personal one of the same name.
+
+```markdown
+---
+name: test-runner
+description: Runs the tests after code changes and explains failures
+tools: bash, read_file, grep
+model: inherit
+color: green
+---
+
+You run the project's tests, read the failing code, and report each failure with file:line and its likely cause.
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Lowercase letters, digits and dashes; the `subagent_type` the main agent passes to `task` |
+| `description` | yes | When the main agent should hand it work |
+| `tools` | no | Comma-separated (or a YAML list); Claude Code's names (`Read`, `Bash`, …) are mapped to ngobe's. Left out: every tool the main agent has, except `task` |
+| `model` | no | `inherit` (the default) or a model id on your server (`/model` lists them). Claude Code's `sonnet`, `opus`, `haiku`, `fable` and `claude-*` ids mean inherit, since your server doesn't serve them |
+| `color` | no | `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink` or `cyan`: its tool calls are shown in it |
+
+Other Claude Code fields (`permissionMode`, `skills`, `hooks`, …) are ignored, and kept when `/agents` edits the file. The body is the agent's instructions.
+
 ## Memory, logs, cache
 
 | Variable | Config key | Default | Meaning |
