@@ -235,6 +235,18 @@ describe("tool calls a small model writes in prose", () => {
     expect(planHandoff("I'll do this:\n```bash\na\nb\nc\nd\ne\nf\ng\n```")).toBeNull(); // a script, not a step
   });
 
+  // Seen live: the prose between a ```tsx block's closing fence and the next block's opening fence
+  // was run as a bash command ("Next, let's create the `Sidebar` … && For `src/components/Sidebar.tsx`:").
+  test("prose between two code blocks is never a shell block", () => {
+    const reply =
+      "Let's build the layout.\n\n```tsx\nexport default function Layout() {\n  return null;\n}\n```\n\nNext, let's create the `Sidebar` and `MainContent` components in `src/components`.\n\nFor `src/components/Sidebar.tsx`:\n\n```tsx\nexport function Sidebar() {\n  return null;\n}\n```";
+    expect(planHandoff(reply)).toBeNull();
+    expect(parseTextToolCalls(`${reply}\nPlease share the output.`, known).calls).toEqual([]);
+    // A real shell block after a code block still counts.
+    const real = `${reply}\n\nI'll install the icons:\n\n\`\`\`bash\nnpm install lucide-react\n\`\`\``;
+    expect(planHandoff(real)?.command).toBe("npm install lucide-react");
+  });
+
   test("<tool_request> is read like <tool_call>, and never shown", () => {
     // Seen live: "Let's run the tests to verify.\n\n<tool_request>" printed as text before the call ran.
     const wrapped = 'Let\'s run the tests.\n\n<tool_request>\n{"name": "bash", "arguments": {"command": "npm test"}}\n</tool_request>';

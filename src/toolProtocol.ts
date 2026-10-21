@@ -112,7 +112,27 @@ export function proseCommand(text: string, known: string[]): string | null {
   return null;
 }
 
-const SHELL_FENCE = /```(?:bash|sh|shell|zsh|console|terminal)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/;
+const SHELL_LANGS = ["bash", "sh", "shell", "zsh", "console", "terminal", ""];
+
+/**
+ * The shell blocks of a reply, each with the command lines in it. Fences are paired in order, so
+ * the text between one block's closing fence and the next one's opening fence is never a block
+ * (seen live: that prose ran as a command). A line that reads like prose (a backtick, which the
+ * shell would run as a command, or a closing colon) makes the block not a shell block.
+ */
+function shellBlocks(text: string): { index: number; lines: string[] }[] {
+  const blocks: { index: number; lines: string[] }[] = [];
+  for (const m of text.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/g)) {
+    if (!SHELL_LANGS.includes(m[1].toLowerCase())) continue;
+    const lines = m[2]
+      .split("\n")
+      .map((l) => l.trim().replace(/^\$\s+/, ""))
+      .filter((l) => l && !l.startsWith("#"));
+    if (lines.some((l) => l.includes("`") || l.endsWith(":"))) continue;
+    blocks.push({ index: m.index, lines });
+  }
+  return blocks;
+}
 const ASKS_TO_RUN =
   /\b(?:provide|share|paste|send|show|give)\b[^.\n]{0,40}\b(?:output|results?|errors?)\b|\blet me know\b[^.\n]{0,40}\b(?:output|results?|errors?|happens)\b|\bonce you(?:'ve| have) run\b|\b(?:run|execute) (?:this|these|it|the (?:following|command|tests?))\b[^.\n]{0,40}\b(?:and|then) (?:share|send|paste|provide|tell)\b/i;
 
@@ -123,14 +143,10 @@ const ASKS_TO_RUN =
  * instructions ("to start the server, run …") are left alone.
  */
 export function shellHandoff(text: string): { command: string; before: string } | null {
-  const m = SHELL_FENCE.exec(text);
-  if (!m || !ASKS_TO_RUN.test(text)) return null;
-  const lines = m[1]
-    .split("\n")
-    .map((l) => l.trim().replace(/^\$\s+/, ""))
-    .filter((l) => l && !l.startsWith("#"));
-  if (!lines.length || lines.length > 3) return null;
-  return { command: lines.join(" && "), before: text.slice(0, m.index).trim() };
+  const block = shellBlocks(text)[0];
+  if (!block || !ASKS_TO_RUN.test(text)) return null;
+  if (!block.lines.length || block.lines.length > 3) return null;
+  return { command: block.lines.join(" && "), before: text.slice(0, block.index).trim() };
 }
 
 // "I'll create …", "Let's start by …", "First, …": the model saying it will do the work itself.
@@ -146,19 +162,12 @@ const SERVER = /^(?:(?:npm|pnpm|yarn|bun) (?:run )?(?:dev|start|serve|preview)|n
  * something. Instructions on their own ("To start the server, run …") are left alone.
  */
 export function planHandoff(text: string): { command: string; before: string } | null {
-  const fence = new RegExp(SHELL_FENCE.source, "g");
-  for (const m of text.matchAll(fence)) {
-    if (!OWN_PLAN.test(text.slice(0, m.index))) return null;
-    const lines = m[1]
-      .split("\n")
-      .map((l) => l.trim().replace(/^\$\s+/, ""))
-      .filter((l) => l && !l.startsWith("#"));
-    if (!lines.length || lines.length > 6) return null;
-    const steps = lines.filter((l) => !SERVER.test(l));
-    if (!steps.length) return null;
-    return { command: steps.join(" && "), before: text.slice(0, m.index).trim() };
-  }
-  return null;
+  const block = shellBlocks(text)[0];
+  if (!block || !OWN_PLAN.test(text.slice(0, block.index))) return null;
+  if (!block.lines.length || block.lines.length > 6) return null;
+  const steps = block.lines.filter((l) => !SERVER.test(l));
+  if (!steps.length) return null;
+  return { command: steps.join(" && "), before: text.slice(0, block.index).trim() };
 }
 
 // Fence languages that can hold a file with this extension.
