@@ -71,10 +71,10 @@ The first time ngobe opens in a folder it asks whether you trust the files there
 | `/help` | Commands and keys |
 | `/clear` (`/new`) | New conversation: clears the context, the screen and session approvals |
 | `/compact [focus]` | Summarize the conversation to free up context |
-| `/model [n\|name]` | List the server's models, or switch (saved as your default) |
+| `/model [n\|name]` | Pick the model, as in Claude Code: enter switches and saves your default, `s` switches for this session only; or switch by name or number |
 | `/mode [ask\|plan\|edit\|auto]` | Show or switch the permission mode (or press shift+tab) |
 | `/permissions` | What runs without asking, and what you allowed this session |
-| `/agents [new <name>]` (`/subagents`) | List sub-agents, or create a custom one in `.ngobe/agents/` |
+| `/agents [new <name>]` (`/subagents`) | Create, edit and delete sub-agents, as in Claude Code (`new <name>` writes a template) |
 | `/init` | Write `AGENTS.md`, a guide to the project for the agent |
 | `/review [ref]`, `/diff` | Review uncommitted changes; show them |
 | `/status`, `/context`, `/cost`, `/todos`, `/tools`, `/memory`, `/config` | Session, context window, usage, task list, tools, memory, settings |
@@ -85,7 +85,7 @@ Keys: enter sends, esc interrupts a run, shift+tab cycles the mode, ctrl+v paste
 
 Memory: say "remember that …" (or "always …", "I prefer …") and it goes into `NGOBE.md`; `/memory` shows what ngobe knows about the folder. In a new session, "where did we stop?" or "continue" brings back the last work in the folder or its project, even if ngobe was cut off mid-run.
 
-Sub-agents take one task in a fresh context and return a single report, so the main conversation stays small. Built in: `general-purpose` and `explore` (read-only). Custom agents are markdown files with `name`, `description` and `tools` frontmatter in `.ngobe/agents/` or `~/.config/ngobe/agents/`; Claude Code's `.claude/agents/` files work too. With the default lean tool profile the `task` tool is only offered once you define a custom agent, because every sub-agent re-reads its prompt (slow on a CPU server).
+Sub-agents take one task in a fresh context and return a single report, so the main conversation stays small. Built in: `general-purpose` and `explore` (read-only). `/agents` works like Claude Code's: **Create new agent** asks where it goes (the project's `.ngobe/agents/` or your `~/.config/ngobe/agents/`), then either generates the name, description and instructions with the current model from a sentence you write, or lets you write them; then its tools (all, groups such as read-only or MCP, or single tools), its model (inherit the conversation's, or another model on your server) and its color. Pick an existing agent to view it, change its tools, model or color, or delete it. Changes apply to the next task, without a restart. The files are Claude Code's format (`name`, `description`, `tools`, `model`, `color` frontmatter; see docs/configuration.md), and Claude Code's `.claude/agents/` files work too. With the default lean tool profile the `task` tool is only offered once you define a custom agent, because every sub-agent re-reads its prompt (slow on a CPU server).
 
 ## Documentation
 

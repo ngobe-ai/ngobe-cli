@@ -39,6 +39,8 @@ export interface ToolView {
   /** One line under the title: "Read 87 lines", "+2 −1", "exit 0 · 3.4s". */
   summary?: string;
   preview?: PreviewLine[];
+  /** A sub-agent's color (its calls are shown in it). */
+  color?: string;
 }
 
 export interface ToolContext {

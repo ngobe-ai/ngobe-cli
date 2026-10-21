@@ -38,6 +38,22 @@ export interface ModelInfo {
   raw: Record<string, unknown>;
 }
 
+/** "7.6B params · 4.4 GB · 32k context", from what the server reports (llama.cpp's meta); "" if nothing. */
+export function describeModel(m: ModelInfo): string {
+  const meta = (m.raw.meta ?? {}) as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" && v > 0 ? v : null);
+  const params = num(meta.n_params);
+  const size = num(meta.size);
+  const ctx = num(meta.n_ctx_train);
+  return [
+    params ? `${(params / 1e9).toFixed(params < 1e10 ? 1 : 0)}B params` : "",
+    size ? `${(size / 1024 ** 3).toFixed(1)} GB` : "",
+    ctx ? `${Math.round(ctx / 1024)}k context` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export class ModelTimeoutError extends Error {}
 
 /**
@@ -65,6 +81,15 @@ export class LLM {
     this.client = new OpenAI({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, maxRetries: cfg.maxRetries, timeout: 60 * 60_000, fetch: fetchNoLimit });
     this.temperature = cfg.temperature;
     this.textTools = cfg.toolMode === "text";
+  }
+
+  /** The same endpoint and settings with another model: a sub-agent's own (agents.ts agentModel). */
+  withModel(model: string): LLM {
+    if (model === this.cfg.model) return this;
+    const other = new LLM({ ...this.cfg, model });
+    other.textTools = this.textTools;
+    other.onNotice = this.onNotice;
+    return other;
   }
 
   /** Open the SSH tunnel, if one is configured, before the first request. */

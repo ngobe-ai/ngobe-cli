@@ -11,8 +11,9 @@ import {ACCENT, Header, MODE_COLOR, type HeaderInfo} from "./Header.js";
 import {gradientAt} from "./logo.js";
 import {renderMarkdown} from "../markdown.js";
 import type {SlashCommand} from "../slash.js";
-import type {EntryKind, NoteTone, Store} from "./store.js";
+import type {EntryKind, NoteTone, SelectState, Store} from "./store.js";
 import {highlight} from "../diff.js";
+import {AGENT_COLORS} from "../agents.js";
 
 /** SGR mouse reports (enabled in tui.tsx): button 64 is the wheel turned up, 65 down. */
 // eslint-disable-next-line no-control-regex
@@ -143,6 +144,8 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping, onPasteI
             <EntryView key={e.id} kind={e.kind} text={e.text} tone={e.tone} view={e.view} />
           ))}
           {store.confirm ? <ConfirmPanel prompt={store.confirm.prompt} /> : null}
+          {store.select ? <SelectPanel select={store.select} /> : null}
+          {store.input ? <QuestionPanel title={store.input.req.title} /> : null}
         </Box>
       </Box>
 
@@ -182,6 +185,10 @@ export function App({store, config, onInterrupt, onModeCycle, onTyping, onPasteI
         <Text dimColor wrap="truncate-end">
           {store.trust
             ? "↑/↓ choose · enter confirm · esc exit"
+            : store.select
+            ? selectHint(store.select)
+            : store.input
+            ? "enter submit · esc cancel"
             : store.confirm
             ? "y allow · n deny · a always this session · esc deny"
             : busy
@@ -315,7 +322,9 @@ function ToolRow({view}: {view: Readonly<ToolView>}) {
     <Box flexDirection="column" paddingX={1} marginTop={1}>
       <Text wrap="truncate-end">
         <Text color={dot}>⏺ </Text>
-        <Text bold>{view.label}</Text>
+        <Text bold color={view.color ? AGENT_COLORS[view.color] : undefined}>
+          {view.label}
+        </Text>
         {view.target ? <Text dimColor>({view.target})</Text> : null}
       </Text>
       {running ? (
@@ -394,6 +403,56 @@ function ConfirmPanel({prompt}: {prompt: string}) {
         Permission needed
       </Text>
       <Text>{prompt}</Text>
+    </Box>
+  );
+}
+
+const SELECT_ROWS = 12; // long lists (every tool, every model) scroll around the cursor
+
+/** A menu: "❯ 1. Label  description", "[x]" boxes when several can be checked. */
+function SelectPanel({select}: {select: SelectState}) {
+  const {req, cursor, checked} = select;
+  const from = Math.max(0, Math.min(cursor - Math.floor(SELECT_ROWS / 2), req.options.length - SELECT_ROWS));
+  const shown = req.options.slice(from, from + SELECT_ROWS);
+  const width = Math.max(...req.options.map((o) => o.label.length));
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} marginTop={1} marginX={1}>
+      <Text bold color={ACCENT}>
+        {req.title}
+      </Text>
+      {from > 0 ? <Text dimColor>  ↑ {from} more</Text> : null}
+      {shown.map((o, i) => {
+        const at = from + i === cursor;
+        const box = req.multi ? (checked.has(o.value) ? "[x] " : "[ ] ") : `${from + i + 1}. `;
+        return (
+          <Text key={o.value} wrap="truncate-end">
+            <Text color={at ? ACCENT : undefined} bold={at}>
+              {at ? "❯ " : "  "}
+              {box}
+              {o.description ? o.label.padEnd(width + 2) : o.label}
+            </Text>
+            {o.description ? <Text dimColor>{o.description}</Text> : null}
+          </Text>
+        );
+      })}
+      {from + SELECT_ROWS < req.options.length ? <Text dimColor>  ↓ {req.options.length - from - SELECT_ROWS} more</Text> : null}
+    </Box>
+  );
+}
+
+function selectHint(select: SelectState): string {
+  const {multi, alt} = select.req;
+  return ["↑/↓ choose", multi ? "space check · enter done" : "enter select", alt ? `${alt.key} ${alt.label}` : "", "esc cancel"].filter(Boolean).join(" · ");
+}
+
+/** A question answered in the prompt box below. */
+function QuestionPanel({title}: {title: string}) {
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} marginTop={1} marginX={1}>
+      <Text bold color={ACCENT}>
+        {title}
+      </Text>
+      <Text dimColor>Type below, then enter.</Text>
     </Box>
   );
 }
@@ -535,11 +594,32 @@ function InputBox({
 
   const submit = (text: string) => {
     if (text.trim() === "") return;
-    store.submit(text);
+    if (store.input) store.answerInput(text.trim());
+    else store.submit(text);
     setHistIndex(null);
   };
 
   useInput((input, key) => {
+    const select = store.select;
+    if (select) {
+      if (key.upArrow || input === "k") store.moveSelect(-1);
+      else if (key.downArrow || input === "j") store.moveSelect(1);
+      else if (input === " ") store.toggleSelect();
+      else if (key.return) store.answerSelect();
+      else if (select.req.alt && input === select.req.alt.key) store.answerSelect(true);
+      else if (key.escape || (key.ctrl && input === "c")) store.cancelSelect();
+      else if (/^[1-9]$/.test(input) && !select.req.multi && Number(input) <= select.req.options.length) {
+        store.moveSelect(Number(input) - 1 - select.cursor);
+        store.answerSelect();
+      }
+      return;
+    }
+    if (store.input && (key.escape || (key.ctrl && input === "c"))) {
+      store.answerInput(null);
+      setValue("");
+      setCursor(0);
+      return;
+    }
     if (store.trust) {
       if (key.upArrow) store.moveTrustChoice(0);
       else if (key.downArrow) store.moveTrustChoice(1);
@@ -587,7 +667,7 @@ function InputBox({
     onActivity();
 
     // The "/" menu: ↑/↓ choose, tab completes, enter runs the highlighted command.
-    if (suggestions.length && pick) {
+    if (suggestions.length && pick && !store.input) {
       if (key.upArrow || key.downArrow) {
         const n = Math.min(suggestions.length, MAX_SUGGESTIONS);
         setSelected((Math.min(selected, n - 1) + (key.upArrow ? n - 1 : 1)) % n);
@@ -691,7 +771,7 @@ function InputBox({
   }
 
   const confirm = store.confirm;
-  const menu = confirm || store.trust ? [] : suggestions.slice(0, MAX_SUGGESTIONS);
+  const menu = confirm || store.trust || store.input ? [] : suggestions.slice(0, MAX_SUGGESTIONS);
   const nameWidth = Math.max(0, ...menu.map((c) => `/${c.name}${c.args ? ` ${c.args}` : ""}`.length));
   return (
     <Box flexDirection="column" flexGrow={1}>
@@ -720,7 +800,7 @@ function InputBox({
           {lines.length === 1 && lines[0] === "" ? (
             <>
               <Text inverse> </Text>
-              <Text dimColor> Ask ngobe anything · / for commands · drop a file path to read it</Text>
+              <Text dimColor> {store.input ? (store.input.req.placeholder ?? "") : "Ask ngobe anything · / for commands · drop a file path to read it"}</Text>
             </>
           ) : null}
           {(lines.length === 1 && lines[0] === "" ? [] : lines).map((line, i) => (

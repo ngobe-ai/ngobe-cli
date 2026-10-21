@@ -1,6 +1,6 @@
 import type { Mode } from "../config.js";
 import type { Todo, ToolView } from "../types.js";
-import { runDoneLine, type Activity, type RunSummary } from "../ui.js";
+import { runDoneLine, type Activity, type InputRequest, type RunSummary, type SelectAnswer, type SelectRequest } from "../ui.js";
 
 export type EntryKind = "user" | "assistant" | "tool" | "note" | "done";
 export type NoteTone = "info" | "warn" | "error";
@@ -26,6 +26,19 @@ export interface TrustRequest {
   resolve: (ok: boolean) => void;
 }
 
+export interface SelectState {
+  req: SelectRequest;
+  cursor: number;
+  /** Multi-select: the checked values. */
+  checked: Set<string>;
+  resolve: (answer: SelectAnswer | null) => void;
+}
+
+export interface InputState {
+  req: InputRequest;
+  resolve: (text: string | null) => void;
+}
+
 let nextId = 1;
 
 /**
@@ -42,6 +55,10 @@ export class Store {
   todos: Todo[] = [];
   confirm: ConfirmRequest | null = null;
   trust: TrustRequest | null = null;
+  /** An open menu (/agents, /model): the arrow keys move in it. */
+  select: SelectState | null = null;
+  /** A question answered in the prompt box: enter gives it the text instead of sending a request. */
+  input: InputState | null = null;
   /** Shown in the header; /model changes it. */
   model = "";
   history: string[] = [];
@@ -206,6 +223,75 @@ export class Store {
 
   answerTrust(ok: boolean) {
     this.trust?.resolve(ok);
+  }
+
+  // --- menus and questions (/agents, /model) -------------------------------------
+
+  requestSelect(req: SelectRequest): Promise<SelectAnswer | null> {
+    this.finalize();
+    return new Promise((resolve) => {
+      const initial = Math.max(0, Math.min(req.options.length - 1, req.initial ?? 0));
+      this.select = {
+        req,
+        cursor: initial,
+        checked: new Set(req.options.filter((o) => o.checked).map((o) => o.value)),
+        resolve: (answer) => {
+          this.select = null;
+          this.notify(true);
+          resolve(answer);
+        },
+      };
+      this.notify(true);
+    });
+  }
+
+  moveSelect(delta: number) {
+    if (!this.select) return;
+    const n = this.select.req.options.length;
+    this.select.cursor = (this.select.cursor + delta + n) % n;
+    this.notify(true);
+  }
+
+  /** Multi-select: check or uncheck the option under the cursor. */
+  toggleSelect() {
+    const s = this.select;
+    if (!s?.req.multi) return;
+    const value = s.req.options[s.cursor]?.value;
+    if (value === undefined) return;
+    if (s.checked.has(value)) s.checked.delete(value);
+    else s.checked.add(value);
+    this.notify(true);
+  }
+
+  /** Enter (or the alt key): the option under the cursor, or the checked ones. */
+  answerSelect(alt = false) {
+    const s = this.select;
+    if (!s) return;
+    const values = s.req.multi ? s.req.options.filter((o) => s.checked.has(o.value)).map((o) => o.value) : [s.req.options[s.cursor]?.value].filter((v): v is string => v !== undefined);
+    s.resolve({ values, alt });
+  }
+
+  cancelSelect() {
+    this.select?.resolve(null);
+  }
+
+  requestInput(req: InputRequest): Promise<string | null> {
+    this.finalize();
+    return new Promise((resolve) => {
+      this.input = {
+        req,
+        resolve: (text) => {
+          this.input = null;
+          this.notify(true);
+          resolve(text);
+        },
+      };
+      this.notify(true);
+    });
+  }
+
+  answerInput(text: string | null) {
+    this.input?.resolve(text);
   }
 
   runDone(summary: RunSummary) {

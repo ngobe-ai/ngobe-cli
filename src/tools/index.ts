@@ -64,10 +64,14 @@ const LEAN = new Set([
  * defines a custom agent, which is the user asking for them.
  */
 export function buildTools(config: Config, opts: { memory: boolean; agents?: AgentDef[] }): Tool[] {
-  const agents = opts.agents ?? [];
   const full = config.toolProfile === "full";
-  const task = agents.length && (full || agents.some((a) => a.source !== "built-in")) ? [taskTool(agents)] : [];
+  const task = taskToolFor(config, opts.agents ?? []) ?? [];
   const all = [...coreTools, ...(config.searchProviders.length ? [webSearchTool] : []), ...(opts.memory ? [remember] : []), ...task];
   if (full) return all;
   return all.filter((t) => LEAN.has(t.name) || t.name === "task").map((t) => (t.lean ? { ...t, ...t.lean } : t));
+}
+
+/** The task tool for these agents, or null: it comes with the full profile, or once a custom agent exists. */
+export function taskToolFor(config: Config, agents: AgentDef[]): [Tool] | null {
+  return agents.length && (config.toolProfile === "full" || agents.some((a) => a.source !== "built-in")) ? [taskTool(agents)] : null;
 }

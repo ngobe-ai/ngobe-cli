@@ -6,7 +6,7 @@ import {Store} from "./store.js";
 import {App, type TuiConfig} from "./App.js";
 import type {Mode} from "../config.js";
 import type {Todo, ToolView} from "../types.js";
-import type {Activity, RunSummary, Ui} from "../ui.js";
+import type {Activity, InputRequest, RunSummary, SelectAnswer, SelectRequest, Ui} from "../ui.js";
 
 export type {TuiConfig};
 
@@ -103,6 +103,12 @@ export class Tui implements Ui {
   }
   trust(dir: string): Promise<boolean> {
     return this.store.requestTrust(dir);
+  }
+  select(req: SelectRequest): Promise<SelectAnswer | null> {
+    return this.store.requestSelect(req);
+  }
+  input(req: InputRequest): Promise<string | null> {
+    return this.store.requestInput(req);
   }
   onInterrupt(cb: () => boolean): void {
     this.userInterrupt = cb;
