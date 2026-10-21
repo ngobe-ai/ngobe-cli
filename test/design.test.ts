@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { parsePalette, uiHint, wantsUi } from "../src/design.js";
+import { dropRepeats, UI_PROMPT } from "../src/vision.js";
 import { readFile } from "../src/tools/readFile.js";
 import { fakeModel, testConfig, tmpDir } from "./helpers.js";
 
@@ -51,7 +52,7 @@ describe("building a UI from an image", () => {
       const out = await readFile.run({ path: "login.png" }, { cwd, config, request: "reproduce this UI as login.html: login.png" });
       expect(out).toContain("Welcome back");
       const body = model.requests[0] as { max_tokens: number; messages: { content: { type: string; text?: string }[] }[] };
-      expect(body.messages[0].content.find((p) => p.type === "text")?.text).toMatch(/blueprint/i);
+      expect(body.messages[0].content.find((p) => p.type === "text")?.text).toBe(UI_PROMPT);
       expect(body.max_tokens).toBeGreaterThanOrEqual(900);
     } finally {
       model.stop();
@@ -70,6 +71,17 @@ describe("building a UI from an image", () => {
     expect(palette).toHaveLength(10);
     expect(palette).toContain("#E11D2A");
     expect(palette).toContain("#2563EB");
+  });
+
+  // Seen live: the 2B vision model copied the prompt's example ("card 'Top hits'", "green bar")
+  // into the blueprint of a page that had neither, and a template with slots made it loop.
+  test("the blueprint prompt has nothing a model could copy, and a looping answer loses its repeats", () => {
+    expect(UI_PROMPT).not.toMatch(/"[^"]+"/);
+    const looped = ["Welcome back", "Email", ...Array.from({ length: 30 }, () => "light grey background, 1 column, centered text"), "Sign in"].join("\n");
+    expect(dropRepeats(looped)).toBe("Welcome back\nEmail\nlight grey background, 1 column, centered text\nSign in");
+    // Numbering doesn't hide a repeat; a heading used twice on a page stays.
+    expect(dropRepeats("8. same line\n9. same line\n10. same line")).toBe("8. same line");
+    expect(dropRepeats("STAR TREK\nTALENT WITHIN\nAbout\nSTAR TREK\nTALENT WITHIN")).toBe("STAR TREK\nTALENT WITHIN\nAbout\nSTAR TREK\nTALENT WITHIN");
   });
 });
 

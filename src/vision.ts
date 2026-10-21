@@ -18,12 +18,11 @@ const PROMPT =
   "You are helping a software developer who can't see this image. First, transcribe every piece of visible text exactly as written (code, error messages, file paths with line numbers, UI labels, numbers), keeping line breaks. Then, in two to four sentences, describe what the image shows (the kind of screen, diagram or photo, layout, anything notable).";
 // For rebuilding a UI: a compact blueprint, not a caption. One line per element keeps a 2B model
 // from padding (and inventing); its example is unlike most screens so it isn't copied.
-const UI_PROMPT = `Describe this user interface so a developer who can't see it can rebuild it. Write a compact blueprint: one line per element, in reading order (top to bottom, left to right), for example:
-- page: dark background; sidebar on the left (about a fifth of the width), main area on the right
-- nav item "Library": book icon, white text, highlighted with a green bar on its left
-- card "Top hits": square album image on top, bold white title, gray subtitle, rounded corners
-- button "Play": round, green, black play icon
-Only include what you can see; never invent elements. Give every text exactly as written. For each element say its alignment (left, centered, right) and whether it spans the full width. Describe colors in words (exact values are measured separately) and sizes relative to the screen or the container. End with one line on the overall style: spacing, corner rounding, shadows, font weights.`;
+// Words only, no example: given one ("card 'Top hits'"), the 2B vision model copied it into the
+// blueprint of a page that had nothing like it, and a template with slots to fill made it loop
+// (both seen live). Asked this way it gives every text of the page in order; the coding model
+// lays it out, and the colors are measured from the pixels.
+export const UI_PROMPT = `Describe this user interface so a developer who can't see it can rebuild it. Go through it from top to bottom. For each section, write one line with the section's name and layout, then one line per element in it: what it is, its exact text in quotes, where it sits (left, centered or right) and its colors in words. Copy every text exactly as written. Only include what you can see. Never repeat a line. End with one line on the overall style: spacing, corner rounding, shadows, font weights.`;
 const MAX_SIDE = 1280;
 const MAX_DIRECT = 1_500_000;
 
@@ -42,6 +41,7 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
       stream: false,
       max_tokens: purpose === "ui" ? 900 : 700,
       temperature: 0.1,
+      frequency_penalty: 0.3, // small vision models fall into repeating a line
       messages: [{ role: "user", content: [{ type: "text", text: purpose === "ui" ? UI_PROMPT : PROMPT }, { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data.toString("base64")}` } }] }],
     }),
     // A CPU server loads the vision model on first use: allow minutes, not Bun's default 300 s cut-off.
@@ -50,7 +50,7 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
   } as RequestInit);
   if (!res.ok) throw new Error(`vision model ${config.visionModel}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const seen = json.choices?.[0]?.message?.content?.trim();
+  const seen = dropRepeats(json.choices?.[0]?.message?.content?.trim() ?? "");
   if (!seen) return null;
   if (purpose !== "ui") return seen;
   const palette = await measurePalette(file);
@@ -79,4 +79,24 @@ async function prepare(file: string, buf: Uint8Array): Promise<{ mime: string; d
 
 function run(cmd: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => execFile(cmd, args, { timeout: 60_000, env: childEnv() }, (err) => resolve(!err)));
+}
+
+/**
+ * A vision model's answer without the lines it got stuck repeating (seen live: one line thirty
+ * times): a line right after the same line goes, and so does a third time anywhere. A heading a
+ * page really shows twice stays.
+ */
+export function dropRepeats(text: string): string {
+  const key = (l: string) => l.trim().replace(/^\d+[.)]\s*/, "").toLowerCase();
+  const count = new Map<string, number>();
+  const kept: string[] = [];
+  let previous = "";
+  for (const line of text.split("\n")) {
+    const k = key(line);
+    if (k && (k === previous || (count.get(k) ?? 0) >= 2)) continue;
+    if (k) count.set(k, (count.get(k) ?? 0) + 1);
+    previous = k || previous;
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
 }
