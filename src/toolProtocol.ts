@@ -133,6 +133,34 @@ export function shellHandoff(text: string): { command: string; before: string } 
   return { command: lines.join(" && "), before: text.slice(0, m.index).trim() };
 }
 
+// "I'll create …", "Let's start by …", "First, …": the model saying it will do the work itself.
+const OWN_PLAN = /\b(?:i(?:'ll| will|'m going to| am going to)|let(?:'s| me| us)|first,|step 1\b)/i;
+// Commands that never exit: started by the user, or with bash run_in_background.
+const SERVER = /^(?:(?:npm|pnpm|yarn|bun) (?:run )?(?:dev|start|serve|preview)|npx (?:next|vite|expo) (?:dev|start)|next dev|vite$|flutter run|php artisan serve|(?:uv run |python3? )?manage\.py runserver|rails s(?:erver)?|go run|cargo run|deno task dev|fastapi dev)\b/;
+
+/**
+ * Small models asked to build something often write it as steps for the user ("First, I'll create
+ * a new Next.js project: ```bash npx create-next-app …```") and stop. When the reply says the
+ * model will do it and has a shell block of a few commands, the first block is run with bash
+ * (servers that never exit left out); the caller only does this for requests to change or build
+ * something. Instructions on their own ("To start the server, run …") are left alone.
+ */
+export function planHandoff(text: string): { command: string; before: string } | null {
+  const fence = new RegExp(SHELL_FENCE.source, "g");
+  for (const m of text.matchAll(fence)) {
+    if (!OWN_PLAN.test(text.slice(0, m.index))) return null;
+    const lines = m[1]
+      .split("\n")
+      .map((l) => l.trim().replace(/^\$\s+/, ""))
+      .filter((l) => l && !l.startsWith("#"));
+    if (!lines.length || lines.length > 6) return null;
+    const steps = lines.filter((l) => !SERVER.test(l));
+    if (!steps.length) return null;
+    return { command: steps.join(" && "), before: text.slice(0, m.index).trim() };
+  }
+  return null;
+}
+
 // Fence languages that can hold a file with this extension.
 const FENCE_LANGS: Record<string, string[]> = {
   html: ["html", "htm"], htm: ["html", "htm"], css: ["css"], scss: ["scss", "css"], js: ["js", "javascript"], mjs: ["js", "javascript"],
@@ -142,6 +170,8 @@ const FENCE_LANGS: Record<string, string[]> = {
   c: ["c"], cpp: ["cpp", "c++"], cs: ["cs", "csharp"], xml: ["xml"], svg: ["svg", "xml"], toml: ["toml"],
 };
 const FILE_NAME = /(?<![\w/.-])((?:[\w@+-]+\/)*[\w@+-][\w.@+-]*\.([A-Za-z0-9]{1,6}))(?![\w-])/g;
+// Names of technologies, not files: "a new Next.js project" (seen live, saved as a file named Next.js).
+const TECH_NAME = /^(?:next|node|nuxt|vue|react|express|nest|three|chart|d3|ember|backbone|alpine|angular|moment|day|anime|video|socket\.io|p5|pixi|babylon|leaflet|deno|bun|electron|meteor|gatsby|preact|solid|svelte|koa|hapi|sails|knockout|handlebars|underscore|lodash|jquery|ext|mocha|chai|immutable|redux|zod|vite)\.js$/i;
 
 /**
  * A small model asked to create a file often writes it in its reply ("Here's the complete file:
@@ -152,7 +182,8 @@ const FILE_NAME = /(?<![\w/.-])((?:[\w@+-]+\/)*[\w@+-][\w.@+-]*\.([A-Za-z0-9]{1,
 export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { path: string; content: string; before: string } | null {
   const blocks = [...reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
   if (!blocks.length) return null;
-  const names = (text: string) => [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !exists(n.path));
+  const names = (text: string) =>
+    [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !TECH_NAME.test(n.path) && !exists(n.path));
   for (const candidates of [names(request), names(reply)]) {
     for (const file of candidates) {
       const langs = FENCE_LANGS[file.ext];

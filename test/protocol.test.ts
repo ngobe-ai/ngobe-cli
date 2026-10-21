@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { validateArgs } from "../src/tools/schema.js";
-import { fileHandoff, parseTextToolCalls, toTextMessages, visibleLength } from "../src/toolProtocol.js";
+import { fileHandoff, parseTextToolCalls, planHandoff, toTextMessages, visibleLength } from "../src/toolProtocol.js";
 import type { Message } from "../src/types.js";
 
 describe("argument validation", () => {
@@ -214,6 +214,25 @@ describe("tool calls a small model writes in prose", () => {
     expect(fileHandoff(`${one}\n${one}`, "create page.html", none)).toBeNull();
     expect(fileHandoff("Here:\n```html\n<p>a</p>\n<p>b</p>\n<p>c", "create page.html", none)).toBeNull();
     expect(fileHandoff("```css\nbody{}\na{}\np{}\n```", "create page.html", none)).toBeNull(); // CSS is not page.html
+  });
+
+  test("names of frameworks in the reply (Next.js, Node.js) are not files to save", () => {
+    // Seen live: the 7B's setup steps said "a new Next.js project", and its tailwind.config.js block
+    // was saved as a file named Next.js.
+    const reply = "First, I'll create a new Next.js project.\n\n```javascript\nmodule.exports = {\n  content: [],\n  plugins: [],\n}\n```";
+    expect(fileHandoff(reply, "create a web page using nextjs", () => false)).toBeNull();
+    expect(fileHandoff(reply.replace("Next.js", "Node.js"), "build an api", () => false)).toBeNull();
+    // A real file name still counts.
+    expect(fileHandoff(reply.replace("a new Next.js project", "next.config.js"), "set it up", () => false)?.path).toBe("next.config.js");
+  });
+
+  test("commands in the model's own plan are run, not shown: first shell block only, no dev servers", () => {
+    const plan = "Let's start by setting up the project.\n\nFirst, I'll install the dependencies:\n\n```bash\n$ npm install\n# then build\nnpm run build\nnpm run dev\n```\n\nThen open http://localhost:3000.\n\n```bash\nnpm test\n```";
+    expect(planHandoff(plan)).toEqual({ command: "npm install && npm run build", before: "Let's start by setting up the project.\n\nFirst, I'll install the dependencies:" });
+    // Steps for the user ("To start the server, run …") and dev servers alone are not a plan to act on.
+    expect(planHandoff("To start the server, run:\n```bash\nnpm start\n```")).toBeNull();
+    expect(planHandoff("I'll start the dev server:\n```bash\nnpm run dev\n```")).toBeNull();
+    expect(planHandoff("I'll do this:\n```bash\na\nb\nc\nd\ne\nf\ng\n```")).toBeNull(); // a script, not a step
   });
 
   test("<tool_request> is read like <tool_call>, and never shown", () => {

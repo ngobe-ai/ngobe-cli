@@ -2,6 +2,7 @@ import type { AgentDef } from "../agents.js";
 import type { Config } from "../config.js";
 import type { Tool } from "../types.js";
 import { bash, bashOutput, killShell } from "./bash.js";
+import { createProject } from "./createProject.js";
 import { editFile, multiEdit } from "./editFile.js";
 import { gitTools } from "./git.js";
 import { glob } from "./glob.js";
@@ -24,6 +25,7 @@ export const coreTools: Tool[] = [
   glob,
   grep,
   bash,
+  createProject,
   bashOutput,
   killShell,
   todoWrite,
@@ -45,6 +47,7 @@ const LEAN = new Set([
   "glob",
   "grep",
   "bash",
+  "create_project", // without it, a small model writes setup steps for the user instead of a project
   "git_status", // ask and plan modes have no bash: without these the model can't see what changed
   "git_diff",
   "check_latest_version",

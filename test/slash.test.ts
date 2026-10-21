@@ -154,7 +154,8 @@ describe("sub-agents", () => {
     expect(lean.map((t) => t.name)).not.toContain("task");
     expect(lean.map((t) => t.name)).toEqual(expect.arrayContaining(["git_status", "git_diff"])); // ask/plan modes have no bash
     expect(lean.map((t) => t.name)).toContain("project_overview"); // one call instead of many globs and reads
-    expect(lean.length).toBeLessThanOrEqual(14);
+    expect(lean.map((t) => t.name)).toContain("create_project"); // without it a small model writes setup steps instead
+    expect(lean.length).toBeLessThanOrEqual(15);
     expect(lean.find((t) => t.name === "read_file")!.description.length).toBeLessThan(120);
     const custom = [...builtIn, { name: "x", description: "x", prompt: "", source: "project" as const }];
     expect(buildTools(config, { memory: false, agents: custom }).map((t) => t.name)).toContain("task");

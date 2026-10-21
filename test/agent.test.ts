@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { Agent, announcesAction, researchCalls } from "../src/agent.js";
+import { Agent, announcesAction, namedFiles, newProjectHint, researchCalls } from "../src/agent.js";
 import type { Config } from "../src/config.js";
 import { trimHistory } from "../src/context.js";
 import { LLM } from "../src/llm.js";
 import { Memory } from "../src/memory/store.js";
 import type { Permissions } from "../src/permissions.js";
 import { Permissions as RealPermissions } from "../src/permissions.js";
-import type { Message, Tool } from "../src/types.js";
+import type { Message, Tool, ToolContext } from "../src/types.js";
 import { fakeModel, recordingUi, testConfig, tmpDir, type FakeTurn } from "./helpers.js";
 
 let stops: (() => void)[] = [];
@@ -623,6 +623,127 @@ describe("agent loop", () => {
     const asked = (model.requests[0].messages as Message[]).at(-1)!.content as string;
     expect(asked).toContain("reproduce this UI as a single page: login.png");
     expect(asked).toMatch(/Reproduce it faithfully/);
+  });
+
+  // Seen live (2026-10-21): "create a web page follow this design in the image <path>, using nextjs
+  // and tailwindcss, create the project and build it …" → this reply, nothing created, and the
+  // tailwind.config.js block saved as a file named Next.js.
+  const LIVE_SETUP =
+    "To create a web page following the design in the image, I'll follow these steps:\n\n1. **Project Setup**: Create a new Next.js project with TailwindCSS.\n2. **Component Creation**: Break down the design into components.\n3. **Testing**: Build and test the project.\n\nLet's start by setting up the project.\n\n### Step 1: Project Setup\n\nFirst, I'll create a new Next.js project with TailwindCSS.\n\n```bash\nnpx create-next-app@latest cote-web\ncd cote-web\nnpm install tailwindcss\nnpx tailwindcss init -p\n```\n\nEdit `tailwind.config.js` to include the necessary paths:\n\n```javascript\nmodule.exports = {\n  content: [\n    \"./pages/**/*.{js,ts,jsx,tsx}\",\n  ],\n  theme: {\n    extend: {},\n  },\n  plugins: [],\n}\n```\n\nEdit `styles/globals.css` to include TailwindCSS:\n\n```css\n@tailwind base;\n@tailwind components;\n@tailwind utilities;\n```\n\n### Step 2: Component Creation";
+  const LIVE_REQUEST =
+    "i need you to create a web page follow this design in the image /tmp/design.jpeg, using nextjs and tailwindcss, create the project and build it basing on the design in the image and test it as well";
+
+  function projectTools() {
+    const create = counter("create_project", "exec", async () => "Created cote-web/");
+    create.tool.parameters = { type: "object", properties: { framework: { type: "string" }, name: { type: "string" }, typescript: { type: "boolean" }, tailwind: { type: "boolean" } }, required: ["framework", "name"] };
+    const write = counter("write_file", "write");
+    write.tool.parameters = { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] };
+    const shell = counter("bash", "exec", async () => "exit code 0\nok");
+    shell.tool.parameters = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
+    return { create, write, shell };
+  }
+
+  test("setup steps written for the user become the project, made by create_project (seen live: nothing was created)", async () => {
+    const { create, write, shell } = projectTools();
+    const { agent, model } = setup([{ content: LIVE_SETUP }, { content: "Created the project." }], [create.tool, write.tool, shell.tool]);
+    await agent.run(LIVE_REQUEST, new AbortController().signal);
+    expect(create.calls[0]).toEqual({ framework: "nextjs", name: "cote-web", tailwind: true });
+    expect(shell.calls).toEqual([]);
+    expect(write.calls.map((c) => c.path)).not.toContain("Next.js");
+    // The steps after the first are not kept in the conversation: the model goes on from the result.
+    const assistant = (model.requests[1].messages as Message[]).find((m) => m.role === "assistant");
+    expect(assistant?.content).toEndWith("First, I'll create a new Next.js project with TailwindCSS.");
+  });
+
+  test("a generator run with bash (it would ask questions) becomes create_project", async () => {
+    const { create, shell } = projectTools();
+    const { agent } = setup([{ toolCalls: [{ name: "bash", arguments: '{"command": "npx create-next-app@latest shop"}' }] }, { content: "Done." }], [create.tool, shell.tool]);
+    await agent.run("make a new nextjs app called shop", new AbortController().signal);
+    expect(create.calls).toEqual([{ framework: "nextjs", name: "shop" }]);
+    expect(shell.calls).toEqual([]);
+  });
+
+  test("a request for a new project says to start with create_project, and how to build it", async () => {
+    const { create } = projectTools();
+    const { agent, model } = setup([{ content: "ok" }], [create.tool]);
+    await agent.run(LIVE_REQUEST, new AbortController().signal);
+    const asked = (model.requests[0].messages as Message[]).at(-1)!.content as string;
+    expect(asked).toContain('create_project {"framework": "nextjs"');
+    expect(asked).toContain("SOLID and YAGNI");
+    // Any language, not only the web.
+    expect(newProjectHint("create a FastAPI service for invoices", [])).toContain('"framework": "fastapi"');
+    expect(newProjectHint("build me a cli tool in rust that renames photos", [])).toContain('"framework": "rust"');
+    expect(newProjectHint("start a new project for a todo app", [])).toContain("create_project, with the framework or language asked for");
+    // Already such a project here, or work in the project that is here: no new project.
+    expect(newProjectHint("create a web page using nextjs", ["TypeScript", "npm", "Next.js"])).toBe("");
+    expect(newProjectHint("build a landing page with react", ["PHP", "Laravel"])).toBe("");
+    expect(newProjectHint("create a new react app for the admin", ["PHP", "Laravel"])).toContain("vite-react");
+    expect(newProjectHint("fix the login page", [])).toBe("");
+    expect(newProjectHint("build a landing page", [])).toBe(""); // a page, not a project: one HTML file does
+  });
+
+  test("UI guidance follows the stack the request names, not a single HTML file", async () => {
+    const { agent, model } = setup([{ content: "ok" }], []);
+    await agent.run(LIVE_REQUEST, new AbortController().signal);
+    const asked = (model.requests[0].messages as Message[]).at(-1)!.content as string;
+    expect(asked).toContain("Tailwind classes");
+    expect(asked).not.toContain("single HTML file");
+  });
+
+  test("steps and code for the user instead of the work: told to do it with tools", async () => {
+    const { write } = projectTools();
+    const steps = "### Step 2: Hero\n\nReplace the contents of `src/page.tsx` with the following code:\n\n```tsx\nexport default function Page() {\n  return <main>Hero</main>;\n}\n```";
+    const { agent, model, config } = setup([{ content: steps }, { content: "Done." }], [write.tool]);
+    fs.mkdirSync(path.join(config.cwd, "src"));
+    fs.writeFileSync(path.join(config.cwd, "src", "page.tsx"), "old"); // not new: no write_file handoff
+    await agent.run("build the hero section of the page", new AbortController().signal);
+    const nudge = (model.requests[1].messages as Message[]).at(-1)!.content as string;
+    expect(nudge).toContain("Don't write steps or code for the user");
+    expect(nudge).toContain("write_file");
+    // A summary of work done, with how to see it, is an answer.
+    const done = setup([{ content: "I created src/Hero.tsx and updated the page. To see it, run:\n```bash\nnpm run dev\n```" }], [write.tool]);
+    await done.agent.run("build the hero section of the page", new AbortController().signal);
+    expect((done.model.requests[1]?.messages as Message[] | undefined)?.at(-1)?.content ?? "").not.toContain("Don't write steps");
+  });
+
+  test("a project created by a tool becomes the working folder; its starter files can be written out whole", async () => {
+    const seen: string[] = [];
+    const { write } = projectTools();
+    write.tool.run = async (args, ctx) => {
+      seen.push(`${ctx.cwd} ${String(args.path)}`);
+      return "ok";
+    };
+    const create: Tool = {
+      name: "create_project",
+      description: "x",
+      parameters: { type: "object", properties: { framework: { type: "string" }, name: { type: "string" } }, required: ["framework", "name"] },
+      risk: "exec",
+      run: async (args, ctx: ToolContext) => {
+        const dir = path.join(ctx.cwd, String(args.name));
+        fs.mkdirSync(path.join(dir, "src", "app"), { recursive: true });
+        fs.writeFileSync(path.join(dir, "src", "app", "page.tsx"), "export default function Home() { return null }\n");
+        ctx.enterProject?.(dir, [path.join(dir, "src", "app", "page.tsx")]);
+        return "Created site/";
+      },
+    };
+    const page = "Now the home page in src/app/page.tsx:\n\n```tsx\nexport default function Home() {\n  return <main>Startrek</main>;\n}\n```";
+    const { agent, config, log } = setup([{ toolCalls: [{ name: "create_project", arguments: '{"framework": "nextjs", "name": "site"}' }] }, { content: page }, { content: "Built." }], [create, write.tool]);
+    const start = config.cwd;
+    await agent.run("create a new nextjs site", new AbortController().signal);
+    expect(config.cwd).toBe(path.join(start, "site"));
+    expect(seen).toEqual([`${path.join(start, "site")} src/app/page.tsx`]);
+    expect(log.notes.join("\n")).toContain(`Now working in ${path.join(start, "site")}`);
+  });
+
+  test("a dragged-in macOS screenshot path is found: escaped spaces and the narrow no-break space before AM", () => {
+    const dir = tmpDir();
+    const name = "WhatsApp Image 2026-10-21 at 10.52.21 AM.jpeg";
+    fs.writeFileSync(path.join(dir, name), "jpg");
+    const file = path.join(dir, name);
+    // Seen live: the terminal escapes the plain spaces, not the narrow one; the image was never read.
+    expect(namedFiles(`create a web page follow this design in the image ${file.replace(/ /g, "\\ ")}, using nextjs`, "/")).toEqual([file]);
+    // Typed or pasted without escapes.
+    expect(namedFiles(`use the design in ${file} please`, "/")).toEqual([file]);
   });
 
   test("a new file written in the reply is saved with write_file", async () => {

@@ -11,7 +11,9 @@ import { isCorrection, isResumeRequest, projectRootOf, resumeNote, userNote, typ
 import { briefDescription } from "./tools/overview.js";
 import { KNOWN_NAMES } from "./releases/versions.js";
 import { fromImage, uiHint, wantsUi } from "./design.js";
-import { fileHandoff } from "./toolProtocol.js";
+import { fileHandoff, planHandoff } from "./toolProtocol.js";
+import { detectProject } from "./project.js";
+import { frameworkIn, generatorStack, PRINCIPLES, scaffoldArgs } from "./tools/createProject.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
 import { walkDirs } from "./tools/util.js";
@@ -135,24 +137,44 @@ const SUBJECT = /\b(?:project|repo(?:sitory)?|codebase|code base|app|application
  * Files the request names that exist ("summarize ~/Downloads/report.pdf", "the bug in src/sum.js"),
  * at most three: read before the first turn, since a small model often answers "I don't have access
  * to the file" instead of reading it. Quoted names, absolute and ~ paths (drag-and-drop escapes
- * spaces with "\ "), and relative paths with an extension count; URLs don't.
+ * spaces with "\ "; typed ones may not escape them), and relative paths with an extension count;
+ * URLs don't.
  */
 export function namedFiles(input: string, cwd: string): string[] {
+  const isFile = (c: string) => fs.statSync(resolveNamed(cwd, c), { throwIfNoEntry: false })?.isFile() ?? false;
   const candidates = [
     ...[...input.matchAll(/[`'"]([^`'"\n]{2,300})[`'"]/g)].map((m) => m[1]),
-    ...[...input.matchAll(/(?:^|[\s(])((?:~|\.{1,2})?\/(?:\\ |[^\s'"`])+)/g)].map((m) => m[1].replace(/\\ /g, " ")),
+    // macOS names screenshots "… at 10.52.21 AM.png" with a narrow no-break space before AM, which
+    // the terminal doesn't escape (seen live: the design image was never read).
+    ...[...input.matchAll(/(?:^|[\s(])((?:~|\.{1,2})?\/(?:\\ |[  ]|[^\s'"`])+)/g)].map((m) => withSpaces(m[1].replace(/\\ /g, " "), input.slice(m.index + m[0].length), isFile)),
     ...[...input.matchAll(/(?:^|[\s(])((?:[\w.@+-]+\/)*[\w@+-][\w.@+-]*\.[A-Za-z0-9]{1,8})(?=$|[\s,;:!?)]|\.(?:\s|$))/g)].map((m) => m[1]),
   ].map((c) => c.replace(/[.,;:!?)]+$/, ""));
   const found: string[] = [];
   const seen = new Set<string>();
   for (const c of candidates) {
     if (c.includes("://") || found.length >= 3) continue;
-    const abs = path.resolve(cwd, c === "~" || c.startsWith("~/") ? path.join(os.homedir(), c.slice(1)) : c);
+    const abs = resolveNamed(cwd, c);
     if (seen.has(abs)) continue;
     seen.add(abs);
-    if (fs.statSync(abs, { throwIfNoEntry: false })?.isFile()) found.push(c);
+    if (isFile(c)) found.push(c);
   }
   return found;
+}
+
+function resolveNamed(cwd: string, c: string): string {
+  return path.resolve(cwd, c === "~" || c.startsWith("~/") ? path.join(os.homedir(), c.slice(1)) : c);
+}
+
+/** A path typed with plain spaces ("/x/My Image 2.png, please"): the longest run of words that names a file. */
+function withSpaces(start: string, rest: string, isFile: (c: string) => boolean): string {
+  const trimmed = (c: string) => c.replace(/[.,;:!?)]+$/, "");
+  if (isFile(trimmed(start))) return start;
+  const words = rest.replace(/^ /, "").split(/ /).slice(0, 8);
+  for (let n = words.length; n > 0; n--) {
+    const c = trimmed(`${start} ${words.slice(0, n).join(" ")}`);
+    if (!c.includes("\n") && isFile(c)) return c;
+  }
+  return start;
 }
 
 // Read whole when named: the answer can be on any page. Code is read a page at a time (grep finds the rest).
@@ -228,6 +250,47 @@ export function researchCalls(input: string, offered: Map<string, Tool>): [strin
     calls.push(["web_search", { query: `${[...named, ...services].join(" ")} ${topic}` }]);
   }
   return calls;
+}
+
+// Asking for a project that isn't here yet: "create a web page … using nextjs, create the project".
+const NEW_PROJECT =
+  /\b(?:create|build|make|start|set ?up|scaffold|generate|bootstrap|develop|init(?:iali[sz]e)?)\b[^.\n]{0,80}\b(?:project|app|application|site|website|web ?page|landing page|api|service|backend|cli|game|bot)\b/i;
+const NEW = /\b(?:new|fresh|from scratch|another)\b/i;
+
+/**
+ * For a request to create a project that isn't here: start with create_project. Without it, a
+ * small model writes setup steps for the user (seen live: "npx create-next-app …" in a code block,
+ * nothing created). In a project of another kind, only when the request says it's a new one.
+ */
+export function newProjectHint(input: string, stack: string[]): string {
+  if (!NEW_PROJECT.test(input)) return "";
+  const key = frameworkIn(input);
+  const label = key ? generatorStack(key) : undefined;
+  if (label && stack.includes(label)) return "";
+  if (stack.length ? !NEW.test(input) : !key && !/\bnew (?:project|app|application|repo)\b|\bfrom scratch\b/i.test(input)) return "";
+  const call = key ? `create_project {"framework": "${key}", "name": "<folder>"}` : "create_project, with the framework or language asked for";
+  return `(A new project: start with ${call}. It runs the official generator and moves into the new folder. Then build it yourself, file by file, with write_file and edit_file, and check it with the commands it gives. Don't write setup steps or code for the user. ${PRINCIPLES})`;
+}
+
+/** The stack a request asks for by name ("using nextjs and tailwindcss"), for the UI guidance. */
+function requestedStack(input: string): string[] {
+  const key = frameworkIn(input);
+  const named = key ? generatorStack(key) : undefined;
+  return [...(named ? [named] : []), ...(named === "Next.js" ? ["React"] : []), ...(/\btailwind/i.test(input) ? ["Tailwind"] : [])];
+}
+
+// Steps for the user instead of the work: "Step 2: …", "Create a new file … and add the following code".
+const TUTORIAL =
+  /\bstep \d+\b|\b(?:create|edit|open|update|modify|replace|add)\b[^.\n]{0,60}\b(?:file|component|the following|contents|code)\b|\brun the following\b|\bin your terminal\b/i;
+
+/** The arguments of a call, or {} when they aren't a JSON object. */
+function argsOf(call: ToolCall): Args {
+  try {
+    const v = JSON.parse(call.arguments) as unknown;
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Args) : {};
+  } catch {
+    return {};
+  }
 }
 
 const LENGTH_NUDGE =
@@ -310,6 +373,8 @@ export class Agent {
   private running = false;
   /** The last test command run through bash this session. */
   private lastTest: string | undefined;
+  /** Files a generator just wrote (create_project): replaced whole when the model writes them out. */
+  private starter = new Set<string>();
 
   constructor(private d: AgentDeps) {
     this.mode = d.config.mode;
@@ -467,6 +532,7 @@ export class Agent {
     let changeNudged = false;
     let answerNudged = false;
     let lookNudged = false;
+    let tutorialNudges = 0;
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
@@ -496,10 +562,11 @@ export class Agent {
     this.lookedAt = null;
     // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
-    const design = wantsUi(userInput) ? uiHint(this.d.stack ?? [], fromImage(userInput)) : "";
+    const design = wantsUi(userInput) ? uiHint([...(this.d.stack ?? []), ...requestedStack(userInput)], fromImage(userInput)) : "";
     const projects = await projectsNamed(userInput, config.cwd).catch(() => []);
     const located = projects.length ? `(Projects here that the request may mean: ${projects.join(", ")})` : "";
-    const extras = [resumed ? resumeNote(resumed) : "", located, design, fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
+    const creating = toolsForMode(this.d.tools, this.mode).some((t) => t.name === "create_project") ? newProjectHint(userInput, this.d.stack ?? []) : "";
+    const extras = [resumed ? resumeNote(resumed) : "", located, creating, design, fresh ? `(${FRESHNESS_HINT})` : ""].filter(Boolean);
     this.messages.push({ role: "user", content: [userInput, ...extras].join("\n\n") });
     this.status = { label: "Thinking", since: started, tokens: 0 };
     this.running = true;
@@ -562,13 +629,37 @@ export class Agent {
         );
         ui.endTurn();
         // The whole new file written in the reply instead of with write_file (a small-model habit):
-        // save it, rather than spend minutes having the model write it again.
-        if (turn.toolCalls.length === 0 && byName.has("write_file")) {
-          const file = fileHandoff(turn.content, userInput, (p) => fs.existsSync(path.resolve(config.cwd, p)));
-          if (file) {
+        // save it, rather than spend minutes having the model write it again. A generator's starter
+        // file (create_project) counts as new: it is there to be replaced.
+        // Asked to build something, the model's own plan with commands in it ("First, I'll create
+        // the project: ```npx create-next-app …```"): the commands run. The step that comes first
+        // in the reply is taken.
+        if (turn.toolCalls.length === 0) {
+          const file = byName.has("write_file")
+            ? fileHandoff(turn.content, userInput, (p) => {
+                const abs = path.resolve(config.cwd, p);
+                return fs.existsSync(abs) && !this.starter.has(abs);
+              })
+            : null;
+          const plan = changeWanted && (byName.has("bash") || byName.has("create_project")) ? planHandoff(turn.content) : null;
+          if (plan && (!file || plan.before.length <= file.before.length)) {
+            turn.toolCalls = [{ id: `call_${Date.now()}_plan`, name: "bash", arguments: JSON.stringify({ command: plan.command }) }];
+            turn.content = plan.before;
+          } else if (file) {
+            this.starter.delete(path.resolve(config.cwd, file.path));
             turn.toolCalls = [{ id: `call_${Date.now()}_file`, name: "write_file", arguments: JSON.stringify({ path: file.path, content: file.content }) }];
             turn.content = file.before;
           }
+        }
+        // A project made with a generator's command ("npx create-next-app@latest cote-web", which asks
+        // questions no one can answer here): create_project runs it without questions, then moves in.
+        if (byName.has("create_project")) {
+          turn.toolCalls = turn.toolCalls.map((c) => {
+            const scaffold = c.name === "bash" ? scaffoldArgs(String(argsOf(c).command ?? "")) : null;
+            if (!scaffold) return c;
+            if (/\btailwind/i.test(userInput)) scaffold.tailwind = true;
+            return { ...c, name: "create_project", arguments: JSON.stringify(scaffold) };
+          });
         }
         // "Let's run the tests again." with no call (a small-model habit): run them, with the
         // command used before in this session, or the project's. Same permission check as ever.
@@ -635,6 +726,21 @@ export class Agent {
             this.messages.push({ role: "user", content: `Don't give up yet: look in the project first (${how}) for what the request is about, read what you find, then answer: ${quoteRequest(userInput)}` });
             this.d.log?.event("nudge", { run: runId, kind: "look", reply: turn.content.slice(0, 120) });
             continue;
+          }
+          // Asked to build something, the reply is steps and code for the user ("Step 2: Create a
+          // new file … and add the following code"). Twice per request at most.
+          if (changeWanted && tutorialNudges < 2 && nudges < MAX_NUDGES && TUTORIAL.test(turn.content) && /```|\bstep \d/i.test(turn.content)) {
+            const tools = ["create_project", "write_file", "edit_file", "bash"].filter((t) => byName.has(t));
+            if (tools.length) {
+              tutorialNudges++;
+              nudges++;
+              this.messages.push({
+                role: "user",
+                content: `Don't write steps or code for the user: they asked you to do the work. Do the next step yourself now with a tool call (${tools.join(", ")}), then keep going step by step until it's built and checked.`,
+              });
+              this.d.log?.event("nudge", { run: runId, kind: "tutorial", reply: turn.content.slice(0, 120) });
+              continue;
+            }
           }
           // Asked for a change, nothing changed yet: small models describe the fix (or show the
           // code) instead of making it. One nudge to make it.
@@ -969,7 +1075,28 @@ export class Agent {
         ui.info(`Plan approved: now in ${mode} mode.`);
       },
       spawn: (agent, prompt) => this.spawn(agent, prompt, signal),
+      enterProject: (dir, starter) => this.enterProject(dir, starter),
     };
+  }
+
+  /**
+   * Work in a project just created, as if the user had cd'd into it: relative paths and commands
+   * (npm run build) are the new project's, and its starter files may be replaced whole.
+   */
+  private enterProject(dir: string, starter: string[]): void {
+    const { config, perms, ui } = this.d;
+    for (const f of starter) this.starter.add(f);
+    if (path.resolve(dir) === path.resolve(config.cwd)) return;
+    config.cwd = dir;
+    perms.setRequest?.(dir, this.request);
+    this.d.testCommand = undefined;
+    void detectProject(dir)
+      .then((p) => {
+        this.d.stack = p.stack;
+        this.d.testCommand = p.commands.test;
+      })
+      .catch(() => {});
+    ui.info(`Now working in ${dir}`);
   }
 
   /**

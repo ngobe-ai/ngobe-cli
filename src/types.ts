@@ -62,6 +62,8 @@ export interface ToolContext {
   setMode?(mode: Mode): void;
   /** Run a sub-agent on a task (fresh context) and return its final report. */
   spawn?(agent: AgentDef, prompt: string): Promise<string>;
+  /** Work in a project just created (create_project); its starter files may be replaced whole. */
+  enterProject?(dir: string, starter: string[]): void;
 }
 
 /**
