@@ -191,21 +191,29 @@ const TECH_NAME = /^(?:next|node|nuxt|vue|react|express|nest|three|chart|d3|embe
  * else the reply) names. Only files that don't exist yet, or that `exists` says may be replaced
  * (a generator's starter files); existing files are left to edit_file.
  */
-export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { files: { path: string; content: string }[]; before: string } | null {
-  const blocks = [...reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
-  if (!blocks.length) return null;
-  const fileNames = (text: string) => [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !TECH_NAME.test(n.path));
+/** The code blocks of a reply that go with the file named just before them ("2. **Create `src/x.tsx`:**"). */
+export function namedBlocks(reply: string): { path: string; content: string; index: number }[] {
   const named: { path: string; content: string; index: number }[] = [];
   let from = 0;
-  for (const b of blocks) {
+  for (const b of reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)) {
     const gap = reply.slice(from, b.index);
     from = b.index + b[0].length;
     const file = fileNames(gap)
       .filter((n) => FENCE_LANGS[n.ext].includes(b[1].toLowerCase()))
       .at(-1);
-    if (!file || exists(file.path) || b[2].split("\n").length < 3 || named.some((f) => f.path === file.path)) continue;
-    named.push({ path: file.path, content: `${b[2]}\n`, index: b.index });
+    if (file && b[2].split("\n").length >= 3 && !named.some((f) => f.path === file.path)) named.push({ path: file.path, content: `${b[2]}\n`, index: b.index });
   }
+  return named;
+}
+
+function fileNames(text: string): { path: string; ext: string }[] {
+  return [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !TECH_NAME.test(n.path));
+}
+
+export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { files: { path: string; content: string }[]; before: string } | null {
+  const blocks = [...reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
+  if (!blocks.length) return null;
+  const named = namedBlocks(reply).filter((f) => !exists(f.path));
   if (named.length) return { files: named.map(({ path, content }) => ({ path, content })), before: reply.slice(0, named[0].index).trim() };
   for (const candidates of [fileNames(request), fileNames(reply)]) {
     for (const file of candidates.filter((n) => !exists(n.path))) {

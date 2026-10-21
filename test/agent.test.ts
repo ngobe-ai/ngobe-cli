@@ -694,7 +694,8 @@ describe("agent loop", () => {
 
   test("steps and code for the user instead of the work: told to do it with tools", async () => {
     const { write } = projectTools();
-    const steps = "### Step 2: Hero\n\nReplace the contents of `src/page.tsx` with the following code:\n\n```tsx\nexport default function Page() {\n  return <main>Hero</main>;\n}\n```";
+    // No file named: nothing to save from the reply (a named existing file gets the "save it" nudge).
+    const steps = "### Step 2: Hero\n\nOpen your page component and replace its contents with the following code:\n\n```tsx\nexport default function Page() {\n  return <main>Hero</main>;\n}\n```";
     const { agent, model, config } = setup([{ content: steps }, { content: "Done." }], [write.tool]);
     fs.mkdirSync(path.join(config.cwd, "src"));
     fs.writeFileSync(path.join(config.cwd, "src", "page.tsx"), "old"); // not new: no write_file handoff
@@ -785,6 +786,22 @@ describe("agent loop", () => {
     expect(asks[0]).toContain('write_file with {"path": "src/app/layout.tsx"');
     expect(asks).toHaveLength(3);
     expect(asks[2]).toContain("You haven't changed any file yet");
+  });
+
+  // Seen live: the fixed globals.css shown in a code block (the file exists, so not saved), then
+  // "build the project again" — the build ran on the old file and failed the same way, twice.
+  test("a build in the reply's plan waits until the reply's own change to an existing file is saved", async () => {
+    const { write, shell } = projectTools();
+    const reply =
+      "Let's fix the CSS.\n\n1. **Update `src/app/globals.css`:**\n\n```css\n@import \"tailwindcss\";\n\n@theme {\n  --color-brand: #e11d2a;\n}\n```\n\n2. **Build the project again:**\n\n```bash\nnpm run build\n```";
+    const { agent, model, config } = setup([{ content: reply }, { content: "Saved." }], [write.tool, shell.tool]);
+    fs.mkdirSync(path.join(config.cwd, "src", "app"), { recursive: true });
+    fs.writeFileSync(path.join(config.cwd, "src", "app", "globals.css"), "old");
+    await agent.run("fix the build", new AbortController().signal);
+    expect(shell.calls).toEqual([]);
+    const nudge = (model.requests[1].messages as Message[]).at(-1)!.content as string;
+    expect(nudge).toContain("src/app/globals.css");
+    expect(nudge).toContain("write_file");
   });
 
   test("a dragged-in macOS screenshot path is found: escaped spaces and the narrow no-break space before AM", () => {

@@ -11,7 +11,7 @@ import { isCorrection, isResumeRequest, projectRootOf, resumeNote, userNote, typ
 import { briefDescription } from "./tools/overview.js";
 import { KNOWN_NAMES } from "./releases/versions.js";
 import { fromImage, uiHint, wantsUi } from "./design.js";
-import { fileHandoff, planHandoff } from "./toolProtocol.js";
+import { fileHandoff, namedBlocks, planHandoff } from "./toolProtocol.js";
 import { detectProject } from "./project.js";
 import { frameworkIn, generatorStack, PRINCIPLES, scaffoldArgs } from "./tools/createProject.js";
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
@@ -636,14 +636,20 @@ export class Agent {
         // Asked to build something, the model's own plan with commands in it ("First, I'll create
         // the project: ```npx create-next-app …```"): the commands run. The step that comes first
         // in the reply is taken.
+        let unsaved: string[] = [];
         if (turn.toolCalls.length === 0) {
-          const file = byName.has("write_file")
-            ? fileHandoff(turn.content, userInput, (p) => {
-                const abs = path.resolve(config.cwd, p);
-                return fs.existsSync(abs) && !this.starter.has(abs);
-              })
-            : null;
-          const plan = changeWanted && (byName.has("bash") || byName.has("create_project")) ? planHandoff(turn.content) : null;
+          const exists = (p: string) => {
+            const abs = path.resolve(config.cwd, p);
+            return fs.existsSync(abs) && !this.starter.has(abs);
+          };
+          const file = byName.has("write_file") ? fileHandoff(turn.content, userInput, exists) : null;
+          let plan = changeWanted && (byName.has("bash") || byName.has("create_project")) ? planHandoff(turn.content) : null;
+          // Files the reply changes only on screen (existing files aren't saved from a reply): they
+          // are to be saved first, and the plan's commands (a build) would run on the old ones (seen
+          // live: the same build error twice).
+          const shown = changeWanted ? namedBlocks(turn.content).filter((b) => exists(b.path)) : [];
+          unsaved = shown.map((b) => b.path);
+          if (plan && shown.some((b) => b.index < plan!.before.length)) plan = null;
           if (plan && (!file || plan.before.length <= file.before.length)) {
             turn.toolCalls = [{ id: `call_${Date.now()}_plan`, name: "bash", arguments: JSON.stringify({ command: plan.command }) }];
             turn.content = plan.before;
@@ -733,6 +739,15 @@ export class Agent {
             const how = SEARCH_TOOLS.filter((t) => byName.has(t)).join(", ");
             this.messages.push({ role: "user", content: `Don't give up yet: look in the project first (${how}) for what the request is about, read what you find, then answer: ${quoteRequest(userInput)}` });
             this.d.log?.event("nudge", { run: runId, kind: "look", reply: turn.content.slice(0, 120) });
+            continue;
+          }
+          if (unsaved.length && byName.has("write_file") && nudges < MAX_NUDGES) {
+            nudges++;
+            this.messages.push({
+              role: "user",
+              content: `Your reply changes ${unsaved.join(", ")} only on screen: nothing was saved, so a build would run on the old ${unsaved.length > 1 ? "files" : "file"}. Save it now: write_file with {"path": "${unsaved[0]}", "content": "<the complete file>"} (or edit_file), then build.`,
+            });
+            this.d.log?.event("nudge", { run: runId, kind: "unsaved", reply: turn.content.slice(0, 120) });
             continue;
           }
           // Asked to build something, the reply is steps and code for the user ("Step 2: Create a
