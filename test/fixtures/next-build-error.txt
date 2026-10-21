@@ -1,0 +1,41 @@
+
+> startrek-talent-within@0.1.0 build
+> next build
+
+▲ Next.js 16.4.2 (Turbopack)
+✓ Running next.config.ts took 1280ms
+- Cache Components enabled
+- Partial Prefetching enabled
+
+  Creating an optimized production build ...
+
+> Build error occurred
+Error: Turbopack build failed with 1 error:
+./src/app/globals.css
+Error: Error evaluating Node.js code
+Error: `@theme` blocks must only contain custom properties or `@keyframes`.
+
+  @theme {
+>   colors: {
+>     brand: #e11d2a,;
+>   }
+  }
+  
+  (from /home/u/startrek-talent-within/node_modules/@tailwindcss/turbopack/dist/index.js)
+    [at /home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:34:10]
+    [at ai (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:5:1775)]
+    [at O (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:5:1377)]
+    [at /home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:32:7186]
+    [at ai (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:5:1775)]
+    [at O (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:5:1377)]
+    [at On (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:32:2712)]
+    [at async _n (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:38:631)]
+    [at async Ta (/home/u/startrek-talent-within/node_modules/tailwindcss/dist/lib.js:38:1406)]
+    [at async sn (/home/u/startrek-talent-within/node_modules/@tailwindcss/node/dist/index.js:10:3496)]
+
+
+    at ignore-listed frames
+npm notice
+npm notice New major version of npm available! 10.9.7 -> 12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

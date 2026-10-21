@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Tool } from "../types.js";
 import { assertUnchanged, hashText, isGitInternal, isSecretPath, reqStr, resolveInside } from "./util.js";
 import { createdPreview, diffPreview, langOf } from "../diff.js";
+import { fixStale } from "../fixups.js";
 
 export const writeFile: Tool = {
   name: "write_file",
@@ -34,7 +35,8 @@ export const writeFile: Tool = {
   async run(args, ctx) {
     const shown = reqStr(args, "path");
     const abs = resolveInside(ctx.cwd, shown);
-    const content = reqStr(args, "content", true);
+    const fixed = fixStale(abs, reqStr(args, "content", true), ctx.cwd);
+    const content = fixed.content;
     const existing = await fs.readFile(abs, "utf8").catch(() => null);
     if (existing !== null && ctx.files) {
       // Overwriting a file the agent never looked at would silently drop whatever is in it.
@@ -53,6 +55,7 @@ export const writeFile: Tool = {
       ctx.report?.({ summary: `Updated ${shown} (+${d.added} −${d.removed})`, preview: d.lines });
     }
     const n = content.split("\n").length;
-    return `${existing === null ? "Created" : "Updated"} ${shown} (${n} line${n === 1 ? "" : "s"}).`;
+    const done = `${existing === null ? "Created" : "Updated"} ${shown} (${n} line${n === 1 ? "" : "s"}).`;
+    return fixed.note ? `${done}\n${fixed.note}` : done;
   },
 };

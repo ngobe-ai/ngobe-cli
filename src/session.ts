@@ -104,6 +104,7 @@ export async function createSession(config: Config, ui: Ui, opts: SessionOptions
     log,
     command: opts.command,
     testCommand: project.commands.test,
+    checkCommand: project.commands.test ?? project.commands.build,
     stack: project.stack,
     variant: variant.name,
   });

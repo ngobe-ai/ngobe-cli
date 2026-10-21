@@ -44,6 +44,8 @@ interface AgentDeps {
   variant?: string;
   /** The project's test command (from its manifests), for "let's run the tests" without a call. */
   testCommand?: string;
+  /** How to check a change (the test command, else the build): run before a change run ends unchecked. */
+  checkCommand?: string;
   /** NGOBE.md and the record of the latest work per project (null: memory is off). */
   projectMemory?: ProjectMemory | null;
   /** The project's stack ("Flutter", "React", "Tailwind" …): how a UI request should be built. */
@@ -284,6 +286,21 @@ function requestedStack(input: string): string[] {
 // Steps for the user instead of the work: "Step 2: …", "Create a new file … and add the following code".
 const TUTORIAL =
   /\bstep \d+\b|\b(?:create|edit|open|update|modify|replace|add)\b[^.\n]{0,60}\b(?:file|component|the following|contents|code)\b|\brun the following\b|\bin your terminal\b/i;
+
+// Announcing a new file or component: "Let's create the navigation bar component:".
+const NEW_FILE = /\b(?:create|add|write|build|make)\b[^.\n]{0,60}\b(?:component|file|page|section|module|class|screen|view|layout|stylesheet)\b/i;
+
+/** Files were changed after the last test or build the run ran (or none ran). */
+function unchecked(calls: RunResult["calls"], tools: Tool[]): boolean {
+  let lastWrite = -1;
+  let lastCheck = -1;
+  calls.forEach((c, i) => {
+    const command = String(c.args.command ?? "");
+    if (c.ok && tools.find((t) => t.name === c.name)?.risk === "write") lastWrite = i;
+    if (c.name === "bash" && (TEST_COMMAND.test(command) || BUILD_COMMAND.test(command))) lastCheck = i;
+  });
+  return lastWrite > lastCheck;
+}
 
 /** The arguments of a call, or {} when they aren't a JSON object. */
 function argsOf(call: ToolCall): Args {
@@ -535,6 +552,7 @@ export class Agent {
     let answerNudged = false;
     let lookNudged = false;
     let tutorialNudges = 0;
+    let autoChecked = false;
     const changeWanted = wantsChange(userInput);
     const fresh = needsFreshInfo(userInput);
     this.d.log?.event("run_start", { run: runId, mode: this.mode, model: config.model, chars: userInput.length, fresh });
@@ -716,9 +734,13 @@ export class Agent {
             // "Let's update `src/app/layout.tsx` …": name the call (seen live, the bare nudge got the
             // same announcement back twice).
             const file = byName.has("write_file") ? /`([\w@.+-]+(?:\/[\w@.+-]+)*\.[A-Za-z0-9]{1,6})`/.exec(turn.content)?.[1] : undefined;
+            // "1. **Create the navigation bar component:**" (seen live, twice): the call, with its slots.
+            const creating = byName.has("write_file") && NEW_FILE.test(turn.content);
             const content = file
               ? `Continue: call write_file with {"path": "${file}", "content": "<the complete new file>"} now (edit_file for a small change). A reply without a tool call ends your turn.`
-              : NUDGE;
+              : creating
+                ? 'Continue: call write_file with {"path": "<its path, e.g. src/components/Name.tsx>", "content": "<the complete file>"} now. A reply without a tool call ends your turn.'
+                : NUDGE;
             this.messages.push({ role: "user", content });
             this.d.log?.event("nudge", { run: runId, reply: turn.content.slice(0, 120) });
             continue;
@@ -776,6 +798,26 @@ export class Agent {
             this.messages.push({ role: "user", content: CHANGE_NUDGE });
             this.d.log?.event("nudge", { run: runId, kind: "change", reply: turn.content.slice(0, 120) });
             continue;
+          }
+          // Asked for a change, and it was never checked after the last edit: run the project's
+          // check once and let the model fix what it reports (seen live: "build it … and test it",
+          // files written, the run ended without a build).
+          const check = this.d.checkCommand;
+          if (changeWanted && !autoChecked && check && byName.has("bash") && unchecked(result.calls, this.d.tools)) {
+            autoChecked = true;
+            const call: ToolCall = { id: `call_${Date.now()}_check`, name: "bash", arguments: JSON.stringify({ command: check }) };
+            this.messages.push({ role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] });
+            let outputs: string[] = [];
+            let declined = false;
+            try {
+              ({ outputs, declined } = await this.runCalls([call], byName, repeats, signal, runId, result));
+            } finally {
+              this.messages.push({ role: "tool", tool_call_id: call.id, content: outputs[0] ?? "Error: the tool did not run." });
+            }
+            if (!declined && !signal.aborted && !(outputs[0] ?? "").startsWith("exit code 0")) {
+              this.messages.push({ role: "user", content: `(Ngobe ran ${check} to check the work, and it failed. Fix what it reports with edit_file or write_file, then run it again.)` });
+              continue;
+            }
           }
           result.text = turn.content;
           break;
@@ -1122,10 +1164,12 @@ export class Agent {
     config.cwd = dir;
     perms.setRequest?.(dir, this.request);
     this.d.testCommand = undefined;
+    this.d.checkCommand = undefined;
     void detectProject(dir)
       .then((p) => {
         this.d.stack = p.stack;
         this.d.testCommand = p.commands.test;
+        this.d.checkCommand = p.commands.test ?? p.commands.build;
       })
       .catch(() => {});
     ui.info(`Now working in ${dir}`);

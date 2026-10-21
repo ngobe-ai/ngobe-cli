@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bash, bashOutput, killShell } from "../src/tools/bash.js";
+import { bash, bashOutput, errorDigest, killShell } from "../src/tools/bash.js";
 import { editFile, multiEdit } from "../src/tools/editFile.js";
 import { exitPlanMode, todoWrite } from "../src/tools/plan.js";
 import { gitDiff, gitLog, gitStatus } from "../src/tools/git.js";
@@ -270,3 +270,47 @@ describe("git tools", () => {
     await expect(gitLog.run({ path: "../" }, ctx())).rejects.toThrow("outside the project");
   });
 });
+
+// Seen live: the 7B fixed the wrong thing after a failed `next build` whose one real error sat
+// between npm notices and stack frames.
+describe("error digest", () => {
+  test("a failed command's key error comes first, without stack frames and notices", async () => {
+    const log = await fs.readFile(path.join(import.meta.dir, "fixtures", "next-build-error.txt"), "utf8");
+    const digest = errorDigest(log)!;
+    expect(digest).toContain("`@theme` blocks must only contain custom properties or `@keyframes`.");
+    expect(digest).toContain("brand: #e11d2a");
+    expect(digest).not.toContain("[at ");
+    expect(digest).not.toContain("npm notice");
+    expect(digest.length).toBeLessThan(1200);
+    // Compiler and test-runner formats.
+    expect(errorDigest("src/a.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.\nFound 1 error.")).toContain("TS2322");
+    expect(errorDigest("all good\n2 passed")).toBeNull();
+  });
+
+  test("bash puts the digest right after the exit code when a command fails", async () => {
+    const out = await bash.run({ command: "echo 'npm notice x'; echo 'Error: the build broke here' >&2; for i in $(seq 1 3); do echo '    at frame'; done; exit 2" }, ctx());
+    expect(out.split("\n").slice(0, 3)).toEqual(["exit code 2", "Key error (full output below):", "Error: the build broke here"]);
+    expect(await bash.run({ command: "echo fine" }, ctx())).toBe("exit code 0\nfine\n");
+  });
+});
+
+// Seen live in every run: the 7B writes Tailwind 3's directives into a Tailwind 4 project, and the
+// build fails ("@tailwind base" is gone, "tailwindcss/base" doesn't resolve).
+describe("stale framework knowledge fixed on write", () => {
+  const run6 = "/* src/app/globals.css */\n@import 'tailwindcss/base';\n@import 'tailwindcss/components';\n@import 'tailwindcss/utilities';\n\n@tailwind base;\n@tailwind components;\n@tailwind utilities;\n\n:root {\n  --color-brand: #e11d2a;\n}\n";
+
+  test("Tailwind 3 directives in a Tailwind 4 project become @import \"tailwindcss\", and the model is told", async () => {
+    await fs.writeFile(path.join(dir, "project/package.json"), JSON.stringify({ devDependencies: { tailwindcss: "^4.3.3" } }));
+    const out = await writeFile.run({ path: "src/app/globals.css", content: run6 }, ctx());
+    expect(await fs.readFile(path.join(dir, "project/src/app/globals.css"), "utf8")).toBe('@import "tailwindcss";\n/* src/app/globals.css */\n\n:root {\n  --color-brand: #e11d2a;\n}\n');
+    expect(out).toContain('Tailwind 4: the Tailwind 3 directives were changed to @import "tailwindcss";');
+  });
+
+  test("a Tailwind 3 project keeps its directives", async () => {
+    await fs.writeFile(path.join(dir, "project/package.json"), JSON.stringify({ devDependencies: { tailwindcss: "^3.4.17" } }));
+    const out = await writeFile.run({ path: "src/styles.css", content: "@tailwind base;\n@tailwind utilities;\n" }, ctx());
+    expect(await fs.readFile(path.join(dir, "project/src/styles.css"), "utf8")).toBe("@tailwind base;\n@tailwind utilities;\n");
+    expect(out).not.toContain("Tailwind 4");
+  });
+});
+

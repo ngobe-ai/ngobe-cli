@@ -804,6 +804,43 @@ describe("agent loop", () => {
     expect(nudge).toContain("write_file");
   });
 
+  // Seen live (run 6): "1. **Create the navigation bar component:**" and the reply ended, twice;
+  // the bare nudge got the same announcement back.
+  test("an announced new component with no path is nudged with the write_file call to make", async () => {
+    const { write } = projectTools();
+    const say = "Let's create the navigation bar component:\n\n1. **Create the navigation bar component:**";
+    const { agent, model } = setup([{ content: say }, { content: "unused" }], [write.tool]);
+    await agent.run("build the page from the design", new AbortController().signal);
+    const nudge = (model.requests[1].messages as Message[]).at(-1)!.content as string;
+    expect(nudge).toContain('write_file with {"path": "<its path, e.g. src/components/Name.tsx>", "content": "<the complete file>"}');
+  });
+
+  // Seen live: "build it … and test it as well", files written, and the run ended without a build.
+  test("a change run doesn't end unchecked: the project's check runs once, and the model fixes what it reports", async () => {
+    const { write, shell } = projectTools();
+    shell.tool.run = async (args) => {
+      shell.calls.push(args);
+      return "exit code 1\nKey error (full output below):\nError: `@theme` blocks must only contain custom properties";
+    };
+    const model = fakeModel([{ toolCalls: [{ name: "write_file", arguments: '{"path": "a.css", "content": "x"}' }] }, { content: "The page is ready." }, { content: "Fixed it." }]);
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, model: "fake-model", maxRetries: 0, cwd: tmpDir(), mode: "auto" });
+    const { ui } = recordingUi("y");
+    const agent = new Agent({ config, llm: new LLM(config), tools: [write.tool, shell.tool], ui, perms: new RealPermissions(ui, config.mode), systemPrompt: "test", checkCommand: "npm run build" });
+    const result = await agent.run("build the page and test it", new AbortController().signal);
+    expect(shell.calls).toEqual([{ command: "npm run build" }]);
+    expect((model.requests[2].messages as Message[]).at(-1)!.content).toContain("Ngobe ran npm run build to check the work");
+    expect(result.text).toBe("Fixed it.");
+    // Checked by the model itself after its last change: nothing more to run.
+    shell.calls.length = 0;
+    const own = fakeModel([{ toolCalls: [{ name: "write_file", arguments: '{"path": "b.css", "content": "x"}' }] }, { toolCalls: [{ name: "bash", arguments: '{"command": "npm run build"}' }] }, { content: "Built." }]);
+    stops.push(own.stop);
+    const cfg2 = { ...config, baseURL: own.baseURL };
+    const agent2 = new Agent({ config: cfg2, llm: new LLM(cfg2), tools: [write.tool, shell.tool], ui, perms: new RealPermissions(ui, cfg2.mode), systemPrompt: "test", checkCommand: "npm run build" });
+    await agent2.run("build the page and test it", new AbortController().signal);
+    expect(shell.calls).toEqual([{ command: "npm run build" }]);
+  });
+
   test("a dragged-in macOS screenshot path is found: escaped spaces and the narrow no-break space before AM", () => {
     const dir = tmpDir();
     const name = "WhatsApp Image 2026-10-21 at 10.52.21 AM.jpeg";

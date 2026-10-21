@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { fixStale } from "../fixups.js";
 import { diffPreview, langOf } from "../diff.js";
 import type { Args, PreviewLine, Tool, ToolContext } from "../types.js";
 import { assertUnchanged, hashText, isGitInternal, isSecretPath, reqStr, resolveInside } from "./util.js";
@@ -52,12 +53,15 @@ async function applyEdits(path: string, edits: Replacement[], ctx: ToolContext):
     }
   }
 
+  const fixed = fixStale(abs, text, ctx.cwd);
+  if (fixed.note) text = fixed.content;
   await fs.writeFile(abs, text);
   ctx.files?.set(abs, hashText(text));
   // The transcript shows the real diff (line numbers, context), like Claude Code.
   const d = diffPreview(original, text, langOf(path));
   ctx.report?.({ summary: `Updated ${path} (+${d.added} −${d.removed})`, preview: d.lines });
-  return `The file ${path} has been updated. The edited lines now read:\n${snippet(text, touched)}`;
+  const result = `The file ${path} has been updated. The edited lines now read:\n${snippet(text, touched)}`;
+  return fixed.note ? `${result}\n${fixed.note}` : result;
 }
 
 /** Numbered lines around the edits (up to 3 regions), like read_file output. */

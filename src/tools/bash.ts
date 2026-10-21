@@ -22,6 +22,25 @@ export function commandActivity(command: string, description?: string): string {
   return `Running ${command.trim().split(/\s+/).slice(0, 3).join(" ")}`;
 }
 
+// What went wrong, in the words of common compilers, bundlers and test runners.
+const ERROR_LINE = /\b(?:errors?|failed|failure|exception|traceback|panic|cannot find|could not)\b|^\s*(?:FAIL\b|✗|×|✖)/i;
+// Stack frames and notices: long, and never the cause.
+const NOISE = /^\s*(?:at |\[at |npm (?:notice|warn)\b|\(from .*\)\s*$)/i;
+
+/**
+ * The part of a failed command's output that says what went wrong: from the first error line,
+ * up to 14 lines, stack frames and npm notices left out. Seen live: the one real error of a
+ * `next build` sat between notices and frames, and the 7B fixed the wrong thing.
+ */
+export function errorDigest(output: string): string | null {
+  const lines = output.split("\n");
+  const start = lines.findIndex((l) => ERROR_LINE.test(l) && !NOISE.test(l));
+  if (start < 0) return null;
+  const kept = lines.slice(start).filter((l) => !NOISE.test(l)).slice(0, 14).map((l) => l.slice(0, 200));
+  const digest = kept.join("\n").trim();
+  return digest ? digest.slice(0, 1100) : null;
+}
+
 export const bash: Tool = {
   name: "bash",
   label: "Bash",
@@ -122,7 +141,9 @@ export const bash: Tool = {
       });
       child.on("close", (code) => {
         cleanup();
-        resolve(`${stopped ?? `exit code ${code}`}\n${output()}`);
+        const out = output();
+        const digest = code !== 0 && !stopped ? errorDigest(out) : null;
+        resolve(`${stopped ?? `exit code ${code}`}\n${digest ? `Key error (full output below):\n${digest}\n\n` : ""}${out}`);
       });
     });
   },
