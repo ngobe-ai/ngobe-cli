@@ -57,4 +57,19 @@ describe("building a UI from an image", () => {
       model.stop();
     }
   });
+
+  // Seen live: a landing page full of stage photos measured as ten grays; its red brand color
+  // (buttons, headings) was left out.
+  test("strong colors with a small share still make the palette, beside the most used ones", () => {
+    const grays = Array.from({ length: 14 }, (_, i) => {
+      const v = (20 + i * 17).toString(16).padStart(2, "0").toUpperCase();
+      return `  ${5000 - i * 300}: (0,0,0) #${v}${v}${v} srgb(0,0,0)`;
+    });
+    const histogram = [...grays, "  400: (225,29,42) #E11D2A srgb(225,29,42)", "  90: (37,99,235) #2563EB srgb(37,99,235)"].join("\n");
+    const palette = parsePalette(histogram).map((c) => c.hex);
+    expect(palette).toHaveLength(10);
+    expect(palette).toContain("#E11D2A");
+    expect(palette).toContain("#2563EB");
+  });
 });
+

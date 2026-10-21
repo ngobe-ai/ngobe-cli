@@ -70,9 +70,14 @@ export function parsePalette(histogram: string): { hex: string; share: number }[
     if (near) near.count += r.count;
     else kept.push({ ...r });
   }
-  return kept
-    .filter((k) => k.count / total >= 0.0002)
-    .slice(0, 10)
+  // The most used colors, plus the strongest ones: on a page full of photos the top ten are grays,
+  // and the brand color of the buttons and headings (a small share) was left out (seen live).
+  const seen = kept.filter((k) => k.count / total >= 0.0002);
+  const chroma = (hex: string) => Math.max(...rgb(hex)) - Math.min(...rgb(hex));
+  const strong = seen.filter((k) => chroma(k.hex) >= 80).slice(0, 4);
+  const picked = new Set([...seen.filter((k) => !strong.includes(k)).slice(0, 10 - strong.length), ...strong]);
+  return seen
+    .filter((k) => picked.has(k))
     .map((k) => {
       const share = (k.count / total) * 100;
       return { hex: k.hex, share: share >= 1 ? Math.round(share) : Math.max(0.1, Math.round(share * 10) / 10) };
