@@ -648,8 +648,8 @@ export class Agent {
             turn.toolCalls = [{ id: `call_${Date.now()}_plan`, name: "bash", arguments: JSON.stringify({ command: plan.command }) }];
             turn.content = plan.before;
           } else if (file) {
-            this.starter.delete(path.resolve(config.cwd, file.path));
-            turn.toolCalls = [{ id: `call_${Date.now()}_file`, name: "write_file", arguments: JSON.stringify({ path: file.path, content: file.content }) }];
+            for (const f of file.files) this.starter.delete(path.resolve(config.cwd, f.path));
+            turn.toolCalls = file.files.map((f, i) => ({ id: `call_${Date.now()}_file${i}`, name: "write_file", arguments: JSON.stringify(f) }));
             turn.content = file.before;
           }
         }

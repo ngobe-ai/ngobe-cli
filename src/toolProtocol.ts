@@ -184,21 +184,35 @@ const TECH_NAME = /^(?:next|node|nuxt|vue|react|express|nest|three|chart|d3|embe
 
 /**
  * A small model asked to create a file often writes it in its reply ("Here's the complete file:
- * ```html …```") and stops. When the request (or else the reply) names a file that doesn't exist
- * yet and the reply has exactly one complete code block for that kind of file, it becomes a
- * write_file call, with the usual permission check. Existing files are left to edit_file.
+ * ```html …```") and stops. Files the reply writes out whole become write_file calls, with the
+ * usual permission check: each code block under the file named just before it ("2. **Create
+ * `src/components/Header.tsx`:**"), all of them (seen live: page.tsx, a component and the CSS in
+ * one reply, and only the CSS was kept); else, one complete block for a file the request (or
+ * else the reply) names. Only files that don't exist yet, or that `exists` says may be replaced
+ * (a generator's starter files); existing files are left to edit_file.
  */
-export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { path: string; content: string; before: string } | null {
+export function fileHandoff(reply: string, request: string, exists: (p: string) => boolean): { files: { path: string; content: string }[]; before: string } | null {
   const blocks = [...reply.matchAll(/```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```/g)];
   if (!blocks.length) return null;
-  const names = (text: string) =>
-    [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !TECH_NAME.test(n.path) && !exists(n.path));
-  for (const candidates of [names(request), names(reply)]) {
-    for (const file of candidates) {
+  const fileNames = (text: string) => [...text.matchAll(FILE_NAME)].map((m) => ({ path: m[1], ext: m[2].toLowerCase() })).filter((n) => FENCE_LANGS[n.ext] && !TECH_NAME.test(n.path));
+  const named: { path: string; content: string; index: number }[] = [];
+  let from = 0;
+  for (const b of blocks) {
+    const gap = reply.slice(from, b.index);
+    from = b.index + b[0].length;
+    const file = fileNames(gap)
+      .filter((n) => FENCE_LANGS[n.ext].includes(b[1].toLowerCase()))
+      .at(-1);
+    if (!file || exists(file.path) || b[2].split("\n").length < 3 || named.some((f) => f.path === file.path)) continue;
+    named.push({ path: file.path, content: `${b[2]}\n`, index: b.index });
+  }
+  if (named.length) return { files: named.map(({ path, content }) => ({ path, content })), before: reply.slice(0, named[0].index).trim() };
+  for (const candidates of [fileNames(request), fileNames(reply)]) {
+    for (const file of candidates.filter((n) => !exists(n.path))) {
       const langs = FENCE_LANGS[file.ext];
       const fits = blocks.filter((b) => langs.includes(b[1].toLowerCase()) || (!b[1] && blocks.length === 1));
       if (fits.length !== 1 || fits[0][2].split("\n").length < 3) continue;
-      return { path: file.path, content: `${fits[0][2]}\n`, before: reply.slice(0, fits[0].index).trim() };
+      return { files: [{ path: file.path, content: `${fits[0][2]}\n` }], before: reply.slice(0, fits[0].index).trim() };
     }
   }
   return null;

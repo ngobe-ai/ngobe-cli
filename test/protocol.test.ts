@@ -198,12 +198,11 @@ describe("tool calls a small model writes in prose", () => {
       "To reproduce the UI as `login.html`, I'll create a single HTML file with embedded CSS. Here's the complete file:\n\n```html\n<!DOCTYPE html>\n<html lang=\"en\">\n<body>\n  <h1>Welcome back</h1>\n</body>\n</html>\n```\n\nTo see the login page, open this HTML file in a web browser.";
     const none = () => false;
     expect(fileHandoff(reply, "Reproduce this UI as login.html: /tmp/login-mockup.png", none)).toEqual({
-      path: "login.html",
-      content: '<!DOCTYPE html>\n<html lang="en">\n<body>\n  <h1>Welcome back</h1>\n</body>\n</html>\n',
+      files: [{ path: "login.html", content: '<!DOCTYPE html>\n<html lang="en">\n<body>\n  <h1>Welcome back</h1>\n</body>\n</html>\n' }],
       before: "To reproduce the UI as `login.html`, I'll create a single HTML file with embedded CSS. Here's the complete file:",
     });
     // The file the reply names counts too, when the request names none.
-    expect(fileHandoff(reply, "reproduce this mockup as a web page", none)?.path).toBe("login.html");
+    expect(fileHandoff(reply, "reproduce this mockup as a web page", none)?.files[0].path).toBe("login.html");
   });
 
   test("no handoff without a new file named, with an existing file, or with several or unfinished blocks", () => {
@@ -223,7 +222,24 @@ describe("tool calls a small model writes in prose", () => {
     expect(fileHandoff(reply, "create a web page using nextjs", () => false)).toBeNull();
     expect(fileHandoff(reply.replace("Next.js", "Node.js"), "build an api", () => false)).toBeNull();
     // A real file name still counts.
-    expect(fileHandoff(reply.replace("a new Next.js project", "next.config.js"), "set it up", () => false)?.path).toBe("next.config.js");
+    expect(fileHandoff(reply.replace("a new Next.js project", "next.config.js"), "set it up", () => false)?.files[0].path).toBe("next.config.js");
+  });
+
+  // Seen live: page.tsx, a Header component and globals.css in one reply, each under its name;
+  // only globals.css (the one css block) was saved and 14 minutes of page code were dropped.
+  test("several files in one reply, each under its name, are all saved; existing files are left alone", () => {
+    const tsx = (name: string) => `export default function ${name}() {\n  return <main>${name}</main>;\n}`;
+    const reply = [
+      "Let's replace the starter files with the content from the design image.",
+      `1. **Replace \`src/app/page.tsx\`:**\n\n\`\`\`tsx\n${tsx("Home")}\n\`\`\``,
+      `2. **Create \`src/components/Header.tsx\`:**\n\n\`\`\`tsx\n${tsx("Header")}\n\`\`\``,
+      `3. **Update \`src/app/globals.css\`:**\n\n\`\`\`css\n@import "tailwindcss";\n\nbody { margin: 0; }\n\`\`\``,
+      "4. In `src/lib/data.ts` (yours, already there):\n\n```ts\nexport const a = 1;\nexport const b = 2;\nexport const c = 3;\n```",
+    ].join("\n\n");
+    const handoff = fileHandoff(reply, "build the page from the design", (p) => p === "src/lib/data.ts");
+    expect(handoff?.files.map((f) => f.path)).toEqual(["src/app/page.tsx", "src/components/Header.tsx", "src/app/globals.css"]);
+    expect(handoff?.files[1].content).toBe(`${tsx("Header")}\n`);
+    expect(handoff?.before).toBe("Let's replace the starter files with the content from the design image.\n\n1. **Replace `src/app/page.tsx`:**");
   });
 
   test("commands in the model's own plan are run, not shown: first shell block only, no dev servers", () => {
