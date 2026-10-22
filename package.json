@@ -1,6 +1,6 @@
 {
   "name": "@ngobe-ai/ngobe",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Ngobe: a resource-efficient coding agent CLI for local OpenAI-compatible models (Docker Model Runner, llama.cpp, Ollama, vLLM) with live official-source verification, safe tools and measured self-improvement",
   "license": "MIT",
   "type": "module",
