@@ -21,6 +21,14 @@ describe("config", () => {
     expect(loadConfig(["--model", "flag"], { ...env, NGOBE_MODEL: "env" }).config.model).toBe("flag");
   });
 
+  test("strong-model settings: the model sees images, small-model helpers, the reply cap", () => {
+    const { env } = home();
+    const d = loadConfig([], env).config;
+    expect([d.modelSeesImages, d.smallModelHelpers, d.maxReplyTokens]).toEqual([false, true, 4096]);
+    const c = loadConfig([], { ...env, NGOBE_MODEL_SEES_IMAGES: "1", NGOBE_SMALL_MODEL_HELPERS: "0", NGOBE_MAX_REPLY_TOKENS: "32000" }).config;
+    expect([c.modelSeesImages, c.smallModelHelpers, c.maxReplyTokens]).toEqual([true, false, 32000]);
+  });
+
   test("errors name the variable that was actually set", () => {
     const { env } = home();
     expect(() => loadConfig([], { ...env, MUGAMBA_MAX_TURNS: "abc" })).toThrow("MUGAMBA_MAX_TURNS");

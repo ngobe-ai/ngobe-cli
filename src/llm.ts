@@ -4,9 +4,6 @@ import type { Message, Tool } from "./types.js";
 import { parseTextToolCalls, textProtocolPrompt, toTextMessages, visibleLength } from "./toolProtocol.js";
 import { ensureTunnel } from "./tunnel.js";
 
-/** The longest reply one request may produce. */
-const MAX_REPLY_TOKENS = 4096;
-
 export interface ToolCall {
   id: string;
   name: string;
@@ -180,7 +177,10 @@ export class LLM {
     let firstTokenMs: number | null = null;
     let content = "";
     let shown = 0;
-    const holdJson = tools.length > 0 && !this.nativeToolsSeen;
+    // Calls written as text: the text protocol's, or a small model's habit even with native tools on.
+    // A strong model's JSON in a reply is an example, never a call.
+    const textCalls = tools.length > 0 && (this.textTools || this.cfg.smallModelHelpers);
+    const holdJson = textCalls && !this.nativeToolsSeen;
     let usage: Usage | null = null;
     let truncated = false;
     // Tool calls arrive in fragments keyed by index; stitch them back together.
@@ -189,8 +189,8 @@ export class LLM {
     try {
       const stream = await this.client.chat.completions.create(
         // max_tokens: on a CPU a runaway reply (a repetition loop, a file-by-file listing) would run for many
-        // minutes; 4,096 is still room for writing a whole file.
-        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true, temperature: this.temperature, max_tokens: MAX_REPLY_TOKENS },
+        // minutes; the default 4,096 is still room for writing a whole file.
+        { model, messages: wire, tools: toolDefs.length ? toolDefs : undefined, stream: true, temperature: this.temperature, max_tokens: this.cfg.maxReplyTokens },
         { signal: combined },
       );
       for await (const chunk of stream) {
@@ -229,7 +229,7 @@ export class LLM {
       .sort((a, b) => a[0] - b[0])
       .map(([i, c]) => ({ ...c, id: c.id || `call_${Date.now()}_${i}` })); // some servers omit ids
     // Models (even with native tools on) sometimes write calls as text; accept those too.
-    if (toolCalls.length === 0 && tools.length) {
+    if (toolCalls.length === 0 && textCalls) {
       const parsed = parseTextToolCalls(content, tools.map((t) => t.name));
       if (parsed.calls.length) {
         content = parsed.content; // only the prose before the call is the reply

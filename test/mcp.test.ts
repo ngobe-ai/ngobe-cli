@@ -7,6 +7,7 @@ import { McpManager } from "../src/mcp/index.js";
 import { firstSentence, mcpNeed, mcpToolName, modelSchema, resultText, toTool } from "../src/mcp/tools.js";
 import { createSession } from "../src/session.js";
 import { trustFolder } from "../src/trust.js";
+import type { ToolImage } from "../src/types.js";
 import { handler, TOOLS } from "./fixtures/mcpServer.js";
 import { fakeModel, recordingUi, testConfig, tmpDir } from "./helpers.js";
 
@@ -112,6 +113,7 @@ describe("tools", () => {
   test("results become text: media and links as placeholders, structured content as JSON", () => {
     expect(resultText({ content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] })).toBe("a\nb");
     expect(resultText({ content: [{ type: "image", data: Buffer.alloc(3000).toString("base64"), mimeType: "image/png" }] })).toBe("[image: image/png, 3 KB; not shown to the model]");
+    expect(resultText({ content: [{ type: "image", data: Buffer.alloc(3000).toString("base64"), mimeType: "image/png" }] }, true)).toBe("[image: image/png, 3 KB; shown to you after the tool results]");
     expect(resultText({ content: [{ type: "resource_link", uri: "file:///a", name: "a" }] })).toBe("[resource: a <file:///a>]");
     expect(resultText({ content: [{ type: "resource", resource: { uri: "file:///b", text: "hi" } }] })).toBe("[resource file:///b]\nhi");
     expect(resultText({ content: [], structuredContent: { ok: 1 } })).toBe('{\n  "ok": 1\n}');
@@ -149,6 +151,16 @@ describe("stdio", () => {
     await expect(fail.run({}, { cwd: "." })).rejects.toThrow("it broke");
     const structured = toTool(client, tools.find((t) => t.name === "structured")!, false);
     expect(await structured.run({}, { cwd: "." })).toContain('"items"');
+  });
+
+  test("a tool's image (a browser screenshot) is shown to a model that sees images", async () => {
+    const client = await connected(stdioSpec("modern"));
+    const { tools } = await client.listTools();
+    const image = toTool(client, tools.find((t) => t.name === "image")!, true);
+    expect(await image.run({}, { cwd: "." })).toContain("not shown to the model");
+    const attached: ToolImage[] = [];
+    expect(await image.run({}, { cwd: ".", attach: (i) => attached.push(i) })).toContain("shown to you after the tool results");
+    expect(attached).toEqual([{ mime: "image/png", data: Buffer.alloc(3000).toString("base64") }]);
   });
 
   test("the server gets its configured env, but not ngobe's credentials", async () => {

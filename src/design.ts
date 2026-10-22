@@ -36,12 +36,26 @@ function framework(stack: string[]): string {
   return "a single HTML file with embedded CSS (no build step; box-sizing: border-box)";
 }
 
-/** Guidance that rides on a UI request (not in the system prompt, which stays the same for every request). */
-export function uiHint(stack: string[], image = true): string {
-  const what = image
-    ? "Building a UI from an image: the image was read for you as a blueprint (layout, components, exact texts) with its measured colors. Reproduce it faithfully: the same sections in the same order, the exact texts, each element's alignment (left, centered, right) as in the image, the measured colors as named theme values, similar proportions, a 4/8 px spacing scale, the same type hierarchy, corner radii and shadows."
-    : "Building a UI: make it look designed, not generic: a clear layout and type hierarchy, a 4/8 px spacing scale, a small consistent palette with accessible contrast.";
-  return `(${what} Build it as ${framework(stack)}, unless the user asked for something else. Include hover, focus and disabled states, make it responsive and accessible (labels, alt text, contrast), and write complete files with no placeholders or TODOs. Keep each file under ~250 lines: split a big screen into components or files. Then say which file to open or run to see it.)`;
+const FAITHFULLY =
+  "Reproduce it faithfully: the same sections in the same order, the exact texts, each element's alignment (left, centered, right) as in the image, the measured colors as named theme values, similar proportions, a 4/8 px spacing scale, the same type hierarchy, corner radii and shadows.";
+
+/**
+ * Guidance that rides on a UI request (not in the system prompt, which stays the same for every
+ * request). `sees`: the model is shown images itself; `screenshots`: a browser tool can take one,
+ * so a model that sees can check its work against the design.
+ */
+export function uiHint(stack: string[], image = true, opts: { sees?: boolean; screenshots?: boolean } = {}): string {
+  const what = !image
+    ? "Building a UI: make it look designed, not generic: a clear layout and type hierarchy, a 4/8 px spacing scale, a small consistent palette with accessible contrast."
+    : opts.sees
+      ? `Building a UI from an image: you can see the image (it comes with the read_file result; read the file if it isn't shown yet), with its measured colors. ${FAITHFULLY}`
+      : `Building a UI from an image: the image was read for you as a blueprint (layout, components, exact texts) with its measured colors. ${FAITHFULLY}`;
+  const check = !(opts.sees && opts.screenshots)
+    ? ""
+    : image
+      ? " When it's built, open the page with the browser tools, take a screenshot and compare it with the image: fix every difference (layout, alignment, spacing, colors, texts), then check again until they match."
+      : " When it's built, open the page with the browser tools, take a screenshot and look at it: fix what looks broken or off, then check again.";
+  return `(${what} Build it as ${framework(stack)}, unless the user asked for something else. Include hover, focus and disabled states, make it responsive and accessible (labels, alt text, contrast), and write complete files with no placeholders or TODOs. Keep each file under ~250 lines: split a big screen into components or files.${check} Then say which file to open or run to see it.)`;
 }
 
 /**

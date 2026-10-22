@@ -5,14 +5,43 @@ import path from "node:path";
 import { childEnv } from "./childEnv.js";
 import type { Config } from "./config.js";
 import { measurePalette } from "./design.js";
+import type { Message, ToolImage } from "./types.js";
 
 /**
- * Images for a coding model that can't see: a small vision model on the same server (visionModel,
- * NGOBE_VISION_MODEL) transcribes the text in the image and says what it shows, and that text is
- * what the coding model reads. PNG and JPEG are sent as they are when small; anything else, or
- * anything big, is converted to a JPEG of at most 1,280 pixels first (sips on macOS, ImageMagick
- * elsewhere), since the server decodes only common formats and the gateway limits request size.
+ * Images for the coding model. One that sees images (modelSeesImages) is shown them: they go in a
+ * message right after the tool results (tool messages can't carry images). One that can't is
+ * given text instead: a small vision model on the same server (visionModel, NGOBE_VISION_MODEL)
+ * transcribes the text in the image and says what it shows. PNG and JPEG are sent as they are
+ * when small; anything else, or anything big, is converted to a JPEG of at most 1,280 pixels
+ * first (sips on macOS, ImageMagick elsewhere), since servers decode only common formats and
+ * gateways limit request size.
  */
+
+/** An image a tool showed, with the call it came from: "Read(design.png)". */
+export interface ShownImage {
+  label: string;
+  image: ToolImage;
+}
+
+/** The images of a turn's tool results, as the message that follows them. */
+export function imagesMessage(images: ShownImage[]): Message {
+  return {
+    role: "user",
+    content: [
+      { type: "text", text: `(Images from the tool results above: ${images.map((s) => s.label).join(", ")})` },
+      ...images.map((s) => ({ type: "image_url" as const, image_url: { url: `data:${s.image.mime};base64,${s.image.data}` } })),
+    ],
+  };
+}
+
+/** Show the image to a model that sees images; the text says so (and gives the measured colors for UI work). Null when it can't be sent. */
+export async function showImage(file: string, buf: Uint8Array, attach: (image: ToolImage) => void, purpose: "general" | "ui" = "general"): Promise<string | null> {
+  const image = await prepare(file, buf);
+  if (!image) return null;
+  attach({ mime: image.mime, data: image.data.toString("base64") });
+  const shown = "The image is shown to you after the tool results.";
+  return purpose === "ui" ? `${shown}${await paletteNote(file)}` : shown;
+}
 
 const PROMPT =
   "You are helping a software developer who can't see this image. First, transcribe every piece of visible text exactly as written (code, error messages, file paths with line numbers, UI labels, numbers), keeping line breaks. Then, in two to four sentences, describe what the image shows (the kind of screen, diagram or photo, layout, anything notable).";
@@ -52,9 +81,13 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const seen = dropRepeats(json.choices?.[0]?.message?.content?.trim() ?? "");
   if (!seen) return null;
-  if (purpose !== "ui") return seen;
+  return purpose === "ui" ? `${seen}${await paletteNote(file)}` : seen;
+}
+
+/** The image's colors measured from the pixels (models, seeing or not, guess hex values badly); "" without ImageMagick. */
+async function paletteNote(file: string): Promise<string> {
   const palette = await measurePalette(file);
-  return palette.length ? `${seen}\n\nMeasured colors (from the pixels, most used first; use these exact values): ${palette.map((c) => `${c.hex} ${c.share}%`).join(", ")}` : seen;
+  return palette.length ? `\n\nMeasured colors (from the pixels, most used first; use these exact values): ${palette.map((c) => `${c.hex} ${c.share}%`).join(", ")}` : "";
 }
 
 /** The image as the server can take it: PNG/JPEG as is when small, else a converted JPEG. */

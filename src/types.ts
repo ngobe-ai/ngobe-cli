@@ -43,8 +43,17 @@ export interface ToolView {
   color?: string;
 }
 
+/** An image for the model: a file read, a browser screenshot. */
+export interface ToolImage {
+  mime: string;
+  /** Base64. */
+  data: string;
+}
+
 export interface ToolContext {
   cwd: string;
+  /** Show an image to the model with this call's result. Only there when the model sees images (modelSeesImages). */
+  attach?(image: ToolImage): void;
   /** The user's current request (an image read for "reproduce this UI" gets a blueprint). */
   request?: string;
   /** How the call should show in the transcript, from the tool itself (an edit's real diff). */

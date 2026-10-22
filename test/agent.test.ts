@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Agent, announcesAction, namedFiles, newProjectHint, researchCalls } from "../src/agent.js";
 import type { Config } from "../src/config.js";
-import { trimHistory } from "../src/context.js";
+import { dropOldImages, trimHistory } from "../src/context.js";
+import { imagesMessage } from "../src/vision.js";
 import { LLM } from "../src/llm.js";
+import { readFile } from "../src/tools/readFile.js";
 import { Memory } from "../src/memory/store.js";
 import type { Permissions } from "../src/permissions.js";
 import { Permissions as RealPermissions } from "../src/permissions.js";
@@ -894,6 +896,107 @@ describe("agent loop", () => {
     expect(memory!.recall(config.cwd).map((f) => [f.kind, f.key, f.value])).toContainEqual(["command", "test", "npm test"]);
     expect(memory!.recentRuns(1)[0]).toMatchObject({ outcome: "completed", tests: "passed", tool_calls: 1 });
     memory!.close();
+  });
+});
+
+describe("strong models", () => {
+  type Part = { type: string; text?: string; image_url?: { url: string } };
+  const screenshot = (seen: { attach?: unknown }) => {
+    const tool: Tool = {
+      name: "mcp__playwright__browser_take_screenshot",
+      description: "Take a screenshot",
+      parameters: { type: "object", properties: {} },
+      risk: "safe",
+      run: async (_a, ctx) => {
+        seen.attach = ctx.attach;
+        ctx.attach?.({ mime: "image/png", data: "iVBORw0KGgo=" });
+        return "Took the screenshot";
+      },
+    };
+    return tool;
+  };
+
+  test("a model that sees images gets a tool's image right after the tool results", async () => {
+    const tool = screenshot({});
+    const { agent, model } = setup([{ toolCalls: [{ name: tool.name, arguments: "{}" }] }, { content: "It matches the design." }], [tool], { modelSeesImages: true });
+    await agent.run("check the page", new AbortController().signal);
+    const messages = model.requests[1].messages as Message[];
+    const i = messages.findIndex((m) => m.role === "tool");
+    expect(messages[i].content).toBe("Took the screenshot");
+    const next = messages[i + 1] as { role: string; content: Part[] };
+    expect(next.role).toBe("user");
+    expect(next.content[0].text).toContain("browser_take_screenshot");
+    expect(next.content[1].image_url?.url).toBe("data:image/png;base64,iVBORw0KGgo=");
+  });
+
+  test("a model that can't see images is never sent one", async () => {
+    const seen: { attach?: unknown } = { attach: "not called" };
+    const tool = screenshot(seen);
+    const { agent, model } = setup([{ toolCalls: [{ name: tool.name, arguments: "{}" }] }, { content: "Done." }], [tool]);
+    await agent.run("check the page", new AbortController().signal);
+    expect(seen.attach).toBeUndefined();
+    expect((model.requests[1].messages as Message[]).some((m) => Array.isArray(m.content))).toBe(false);
+  });
+
+  test("building from an image: told it can see the design and to compare a screenshot of the result", async () => {
+    const { agent, model } = setup([{ content: "Built." }], [screenshot({})], { modelSeesImages: true });
+    await agent.run("build this landing page from the mockup image", new AbortController().signal);
+    const user = (model.requests[0].messages as Message[]).find((m) => m.role === "user");
+    expect(user?.content).toMatch(/you can see the image/i);
+    expect(user?.content).toMatch(/compare it with the image/i);
+  });
+
+  test("a design image named in the request is shown to the model on its first turn", async () => {
+    const { agent, model, config } = setup([{ content: "Built." }], [readFile], { modelSeesImages: true });
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
+    fs.writeFileSync(path.join(config.cwd, "design.png"), png);
+    await agent.run("build this page from design.png", new AbortController().signal);
+    const parts = (model.requests[0].messages as Message[]).flatMap((m) => (Array.isArray(m.content) ? (m.content as Part[]) : []));
+    expect(parts[0].text).toContain("Read(design.png)");
+    expect(parts[1].image_url?.url).toBe(`data:image/png;base64,${Buffer.from(png).toString("base64")}`);
+  });
+
+  test("only the newest images stay in the history; older ones become a note", () => {
+    const shot = (n: number) => imagesMessage([{ label: `Screenshot(${n})`, image: { mime: "image/png", data: `D${n}` } }]);
+    const messages: Message[] = [shot(1), shot(2), shot(3)];
+    dropOldImages(messages, 2);
+    const urls = messages.flatMap((m) => (m.content as Part[]).flatMap((p) => (p.image_url ? [p.image_url.url] : [])));
+    expect(urls).toEqual(["data:image/png;base64,D2", "data:image/png;base64,D3"]);
+    expect(JSON.stringify(messages[0].content)).toContain("Screenshot(1)");
+    expect(JSON.stringify(messages[0].content)).toMatch(/removed to save context/);
+  });
+
+  test("with small-model helpers off, a reply is taken as written: no command run from it, no nudge", async () => {
+    const { tool: shell, calls } = counter("bash", "exec");
+    shell.parameters = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
+    const { tool: edit } = counter("edit_file", "write");
+    const reply = "First, let's run the tests to see which ones fail:\n```bash\nnode --test\n```\nPlease provide the output of the test run.";
+    const { agent, model } = setup([{ content: reply }, { content: "unused" }], [shell, edit], { smallModelHelpers: false });
+    const result = await agent.run("fix the failing tests", new AbortController().signal);
+    expect(calls).toEqual([]);
+    expect(model.requests).toHaveLength(1);
+    expect(result.text).toBe(reply);
+  });
+
+  test("with small-model helpers off, an announcement is not nudged", async () => {
+    const { tool } = counter("probe");
+    const { agent, model } = setup([{ content: "Let me check." }, { content: "unused" }], [tool], { smallModelHelpers: false });
+    await agent.run("go", new AbortController().signal);
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("with small-model helpers off, the text tool protocol still works for endpoints without native tools", async () => {
+    const { tool, calls } = counter("probe");
+    const { agent } = setup([{ content: '<tool_call>\n{"name": "probe", "arguments": {"n": 1}}\n</tool_call>' }, { content: "Done." }], [tool], { smallModelHelpers: false, toolMode: "text" });
+    await agent.run("go", new AbortController().signal);
+    expect(calls).toEqual([{ n: 1 }]);
+  });
+
+  test("the reply cap is maxReplyTokens", async () => {
+    const { agent, model } = setup([{ content: "ok" }], [], { maxReplyTokens: 32000 });
+    await agent.run("hi", new AbortController().signal);
+    expect(model.requests[0].max_tokens).toBe(32000);
   });
 });
 

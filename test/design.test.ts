@@ -31,6 +31,16 @@ describe("building a UI from an image", () => {
     expect(uiHint([])).toMatch(/exact texts/);
   });
 
+  test("a model that sees images is told it can see the design, and to check its work in a screenshot", () => {
+    expect(uiHint([], true)).toContain("blueprint");
+    expect(uiHint([], true, { sees: true })).not.toContain("blueprint");
+    expect(uiHint([], true, { sees: true })).toMatch(/you can see the image/i);
+    expect(uiHint([], true, { sees: true, screenshots: true })).toMatch(/screenshot.*compare it with the image/i);
+    expect(uiHint([], false, { sees: true, screenshots: true })).toMatch(/screenshot/i);
+    // A screenshot is no use to a model that can't see it.
+    expect(uiHint([], true, { screenshots: true })).not.toMatch(/screenshot/i);
+  });
+
   test("the palette is the image's real colors, text colors included, without antialiasing shades", () => {
     // ImageMagick's exact histogram of a login mockup (800×600, sampled to 240×180).
     const histogram = [

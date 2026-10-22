@@ -33,6 +33,8 @@ const MAX_LIST = 300;
  * `buf` is the whole file, or its first MAX_LOAD bytes when `size` says it is bigger.
  */
 export interface ExtractOptions {
+  /** Show an image to a model that sees images; the text to give with it. Null or a throw falls back to `vision`. */
+  show?: (file: string, buf: Uint8Array) => Promise<string | null>;
   /** Describe an image (a vision model); null or a throw falls back to OCR. */
   vision?: (file: string, buf: Uint8Array) => Promise<string | null>;
 }
@@ -283,6 +285,8 @@ async function fromBinary(file: string, ext: string, buf: Uint8Array, size: numb
 
   const image = imageInfo(buf);
   if (image) {
+    const shown = await opts.show?.(file, buf).catch(() => null);
+    if (shown) return { summary: image, text: shown };
     let seen: string | null = null;
     let failed = "";
     try {

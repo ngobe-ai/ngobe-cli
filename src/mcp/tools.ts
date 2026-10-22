@@ -54,13 +54,20 @@ function size(base64: string | undefined): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-function itemText(c: ContentItem): string {
+const MAX_IMAGE_BASE64 = 5_000_000;
+
+/** An image item the model can be shown: a common format, a sane size (browser screenshots are). */
+function showable(c: ContentItem): boolean {
+  return c.type === "image" && !!c.data && /^image\/(png|jpeg|gif|webp)$/.test(c.mimeType ?? "") && c.data.length <= MAX_IMAGE_BASE64;
+}
+
+function itemText(c: ContentItem, shown: boolean): string {
   switch (c.type) {
     case "text":
       return c.text ?? "";
     case "image":
     case "audio":
-      return `[${c.type}: ${c.mimeType ?? "unknown type"}, ${size(c.data)}; not shown to the model]`;
+      return `[${c.type}: ${c.mimeType ?? "unknown type"}, ${size(c.data)}; ${shown && showable(c) ? "shown to you after the tool results" : "not shown to the model"}]`;
     case "resource_link":
       return `[resource: ${c.name ?? c.uri}${c.uri && c.name ? ` <${c.uri}>` : ""}${c.mimeType ? ` (${c.mimeType})` : ""}]${c.description ? ` ${c.description}` : ""}`;
     case "resource": {
@@ -73,10 +80,13 @@ function itemText(c: ContentItem): string {
   }
 }
 
-/** What the model reads: the text items (and placeholders for media), else the structured result. */
-export function resultText(result: CallToolResult): string {
+/**
+ * What the model reads: the text items (and placeholders for media), else the structured result.
+ * `shown`: the images go to the model separately (it sees images), so their placeholders say so.
+ */
+export function resultText(result: CallToolResult, shown = false): string {
   const content = Array.isArray(result.content) ? result.content : [];
-  const parts = content.map(itemText).filter((t) => t !== "");
+  const parts = content.map((c) => itemText(c, shown)).filter((t) => t !== "");
   const hasText = content.some((c) => (c.type === "text" && c.text) || typeof c.resource?.text === "string");
   if (!hasText && result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent, null, 2));
   return parts.join("\n").trim();
@@ -108,7 +118,9 @@ export function toTool(client: McpClient, def: McpToolDef, lean: boolean): Tool 
     activity: () => `Calling ${spec.name}: ${def.name}`,
     async run(args, ctx) {
       const result = await client.callTool(def.name, args, ctx.signal ?? AbortSignal.timeout(spec.toolTimeoutMs));
-      const text = resultText(result);
+      // A browser screenshot is seen, not described, by a model that takes images.
+      if (ctx.attach) for (const c of result.content ?? []) if (showable(c)) ctx.attach({ mime: c.mimeType!, data: c.data! });
+      const text = resultText(result, Boolean(ctx.attach));
       if (result.isError) throw new Error(text || `${def.name} reported an error`);
       return text || "(no output)";
     },

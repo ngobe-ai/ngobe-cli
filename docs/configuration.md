@@ -21,8 +21,32 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 | `NGOBE_TOOL_MODE` | `toolMode` | `auto` | `native` (OpenAI tool calls), `text` (`<tool_call>` protocol in the prompt), `auto` (native, switching to text if the endpoint refuses tools) |
 | `NGOBE_REQUEST_TIMEOUT` | `requestTimeout` | `300` | Seconds without a streamed chunk before a request is abandoned. Raise it for big prompts on slow CPUs |
 | `NGOBE_MAX_RETRIES` | `maxRetries` | `2` | Retries for connection errors, 429 and 5xx |
+| `NGOBE_MODEL_SEES_IMAGES` | `modelSeesImages` | `false` | The model takes images itself (a multimodal model). Images from `read_file` (a design, a screenshot you pasted) and from MCP tools (Playwright's `browser_take_screenshot`) are shown to it, in a message right after the tool results, instead of being described by `visionModel`. The newest 4 stay in the conversation; older ones are replaced by a note (the tool can show them again) |
+| `NGOBE_SMALL_MODEL_HELPERS` | `smallModelHelpers` | `true` | Fixes for small local models' habits: running the commands of a plan it only wrote out, saving files it only showed, tool calls written as text or in code blocks, nudges when it stalls or describes a change instead of making it. Set `false` for a strong model: they mean what they write, and a command shown as an example must not run. The text tool protocol (`toolMode: text`) keeps working |
+| `NGOBE_MAX_REPLY_TOKENS` | `maxReplyTokens` | `4096` | Longest reply, in tokens. Bounds a runaway reply on a CPU; thinking models spend part of it reasoning, so give them more (16000–32000) |
 
 A hosted endpoint receives your prompts and code. `ngobe doctor` labels the endpoint local or remote.
+
+### A strong hosted model
+
+The defaults suit a small model on a CPU. For a strong hosted model (for example GLM-5.3-Flash, `z-ai/glm-5.3-flash` on NVIDIA's API at `https://integrate.api.nvidia.com/v1`, with the key in `NGOBE_API_KEY`), turn the small-model limits off:
+
+```json
+{
+  "baseURL": "https://integrate.api.nvidia.com/v1",
+  "model": "z-ai/glm-5.3-flash",
+  "modelSeesImages": true,
+  "smallModelHelpers": false,
+  "maxReplyTokens": 16000,
+  "maxContextChars": 400000,
+  "toolProfile": "full",
+  "temperature": "default",
+  "keepWarmMinutes": 0,
+  "warmup": false
+}
+```
+
+`modelSeesImages` only if the model reads images. `keepWarmMinutes: 0` and `warmup: false` stop requests that only keep a local server's cache warm; on a hosted API they spend your rate limit. With the Playwright MCP server (below) and `modelSeesImages`, a UI built from an image is checked against a screenshot of the result.
 
 ### Models on your own server, used from your laptop
 
@@ -145,7 +169,7 @@ Other Claude Code fields (`permissionMode`, `skills`, `hooks`, …) are ignored,
 |---|---|---|---|
 | `NGOBE_MEMORY` | `memory` | `1` | `0` turns memory off completely (nothing opened or written, NGOBE.md included) |
 | `NGOBE_MEMORY_FILE` | (environment only) | `<config dir>/NGOBE.md` | Ngobe's global memory: about you, lessons, and what was done in each project. Plain markdown; edit it freely |
-| `NGOBE_VISION_MODEL` | `visionModel` | (none) | A vision model on the same server (e.g. `docker.io/ngobe/qwen3-vl-2b:6k`). `read_file` on an image sends it there and gives the coding model the transcribed text and a description. Without one, images get OCR when tesseract is installed |
+| `NGOBE_VISION_MODEL` | `visionModel` | (none) | A vision model on the same server (e.g. `docker.io/ngobe/qwen3-vl-2b:6k`). `read_file` on an image sends it there and gives the coding model the transcribed text and a description. Without one, images get OCR when tesseract is installed. Not used when `modelSeesImages` is on (the model sees the image itself) |
 | `NGOBE_MOUSE` | `mouse` | `1` | The chat takes the mouse wheel to scroll the conversation. `0` leaves the mouse to the terminal (native selection; scroll with PgUp/PgDn) |
 | `NGOBE_STATE_DIR` | `stateDir` | `$XDG_STATE_HOME/ngobe` (`~/.local/state/ngobe`) | `ngobe.db` (memory) and `logs/` (JSONL audit log, 14 days) |
 | `NGOBE_CACHE_DIR` | `cacheDir` | `$XDG_CACHE_HOME/ngobe` (`~/.cache/ngobe`) | HTTP cache; safe to delete |

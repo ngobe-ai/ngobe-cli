@@ -45,6 +45,16 @@ export interface Config {
   memory: boolean;
   /** A vision model on the same server that describes images for the coding model ("" = none). */
   visionModel: string;
+  /** The model takes images itself (a multimodal model): files and tool screenshots are shown to it, not described. */
+  modelSeesImages: boolean;
+  /**
+   * Fixes for small local models' habits: running the commands of a plan it only wrote out, saving
+   * files it only showed, tool calls written as text, nudges when it stalls. Off for strong models,
+   * which mean what they write.
+   */
+  smallModelHelpers: boolean;
+  /** Longest reply, in tokens: bounds a runaway reply on a CPU; strong (thinking) models need more. */
+  maxReplyTokens: number;
   /** The chat takes the mouse wheel to scroll the conversation (NGOBE_MOUSE=0: the terminal keeps it). */
   mouse: boolean;
   /** NGOBE.md: the global memory, next to config.json unless NGOBE_MEMORY_FILE says otherwise. */
@@ -156,7 +166,8 @@ Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
   NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
   NGOBE_MAX_CONTEXT_CHARS, NGOBE_REQUEST_TIMEOUT, NGOBE_MAX_RETRIES, NGOBE_STATE_DIR,
-  NGOBE_VISION_MODEL (describes images), NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
+  NGOBE_VISION_MODEL (describes images), NGOBE_MODEL_SEES_IMAGES (1 = shown to the model itself),
+  NGOBE_SMALL_MODEL_HELPERS (0 for strong models), NGOBE_MAX_REPLY_TOKENS (default 4096), NGOBE_CACHE_DIR, NGOBE_MEMORY, NGOBE_MEMORY_FILE (NGOBE.md), NGOBE_SEARCH_PROVIDERS (e.g. "brave,searxng"),
   NGOBE_MCP (0 = no MCP servers), NGOBE_MCP_TIMEOUT (startup seconds, default 30), NGOBE_MCP_TOOL_TIMEOUT (seconds, default 120),
   BRAVE_API_KEY, TAVILY_API_KEY, NGOBE_SEARXNG_URL, NGOBE_SEARXNG_KEY, GITHUB_TOKEN, NGOBE_DEBUG
 Config file: $XDG_CONFIG_HOME/ngobe/config.json (default ~/.config/ngobe/config.json).
@@ -344,6 +355,9 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
     memory: bool(setting("MEMORY", "memory").raw, true),
     mouse: bool(setting("MOUSE", "mouse").raw, true),
     visionModel: String(setting("VISION_MODEL", "visionModel").raw ?? ""),
+    modelSeesImages: bool(setting("MODEL_SEES_IMAGES", "modelSeesImages").raw, false),
+    smallModelHelpers: bool(setting("SMALL_MODEL_HELPERS", "smallModelHelpers").raw, true),
+    maxReplyTokens: int(setting("MAX_REPLY_TOKENS", "maxReplyTokens"), 4096, 256),
     memoryFile: envVar(env, "MEMORY_FILE") ?? path.join(path.dirname(configFilePath(env)), "NGOBE.md"),
     warmup: bool(setting("WARMUP", "warmup").raw, true),
     keepWarmMinutes: int(setting("KEEP_WARM_MINUTES", "keepWarmMinutes"), 30, 0),

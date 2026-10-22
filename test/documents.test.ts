@@ -6,6 +6,7 @@ import { extractDocument } from "../src/documents.js";
 import { openDb } from "../src/memory/db.js";
 import { readFile } from "../src/tools/readFile.js";
 import { needOf } from "../src/permissions.js";
+import type { ToolImage } from "../src/types.js";
 import { fakeModel, testConfig, tmpDir } from "./helpers.js";
 
 /** Write a fixture and extract it, as read_file does. */
@@ -254,6 +255,20 @@ describe("images, with a vision model", () => {
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
     fs.writeFileSync(path.join(cwd, "dot.png"), png);
     expect(await readFile.run({ path: "dot.png" }, { cwd, config: testConfig({ cwd }) })).toContain("PNG image, 10×10");
+  });
+
+  test("a model that sees images gets the image itself, not a vision model's description", async () => {
+    const cwd = tmpDir();
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
+    fs.writeFileSync(path.join(cwd, "dot.png"), png);
+    const attached: ToolImage[] = [];
+    // No server behind the vision model: asking it would fail.
+    const config = testConfig({ cwd, baseURL: "http://127.0.0.1:9/v1", visionModel: "vision-model" });
+    const out = await readFile.run({ path: "dot.png" }, { cwd, config, attach: (i) => attached.push(i) });
+    expect(out).toContain("PNG image, 10×10");
+    expect(out).toContain("shown to you after the tool results");
+    expect(attached).toEqual([{ mime: "image/png", data: Buffer.from(png).toString("base64") }]);
   });
 });
 

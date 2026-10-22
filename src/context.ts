@@ -158,6 +158,25 @@ export function trimHistory(messages: Message[], maxChars = 200_000): void {
   }
 }
 
+const DROPPED_IMAGE = "[image removed to save context; call the tool again to see it]";
+
+/**
+ * Images make a request big (hundreds of KB each, every turn): only the newest `keep` stay, older
+ * ones become a note. The tool that showed one can show it again (read the file, take a screenshot).
+ */
+export function dropOldImages(messages: Message[], keep: number): void {
+  let seen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user" || !Array.isArray(m.content)) continue;
+    const parts = [...m.content];
+    for (let j = parts.length - 1; j >= 0; j--) {
+      if (parts[j].type === "image_url" && ++seen > keep) parts[j] = { type: "text", text: DROPPED_IMAGE };
+    }
+    m.content = parts;
+  }
+}
+
 /** Plain-text rendering of messages, for summarizing them. */
 export function transcript(messages: Message[], maxChars: number): string {
   const lines = messages.map((m) => {

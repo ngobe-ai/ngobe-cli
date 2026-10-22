@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Config, Mode } from "./config.js";
-import { FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, toolOutputLimit, transcript, trimHistory, truncate } from "./context.js";
+import { dropOldImages, FRESHNESS_HINT, historySize, modeNote, needsFreshInfo, toolOutputLimit, transcript, trimHistory, truncate } from "./context.js";
 import type { LLM, ToolCall } from "./llm.js";
 import type { AuditLog } from "./log.js";
 import type { Memory } from "./memory/store.js";
@@ -17,7 +17,8 @@ import { frameworkIn, generatorStack, PRINCIPLES, scaffoldArgs } from "./tools/c
 import { needOf, toolsForMode, type Permissions } from "./permissions.js";
 import { validateArgs } from "./tools/schema.js";
 import { walkDirs } from "./tools/util.js";
-import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolView } from "./types.js";
+import type { Args, FileTracker, Message, PreviewLine, Todo, Tool, ToolContext, ToolImage, ToolView } from "./types.js";
+import { imagesMessage, type ShownImage } from "./vision.js";
 import { agentModel, type AgentDef } from "./agents.js";
 import { printable, type Activity, type Ui } from "./ui.js";
 
@@ -129,6 +130,8 @@ function defaultSummary(output: string): { summary: string; preview?: PreviewLin
 }
 
 const PARALLEL = 4; // concurrent read-only tool calls
+/** Images kept in the history for a model that sees them (each one is hundreds of KB on every request). */
+const MAX_IMAGES = 4;
 // Big builds on a CPU server can outlast a limit; the work so far is kept (NGOBE.md records it).
 const GO_ON = 'Say "continue" to pick up where it stopped, or raise the limit in config.json for big builds.';
 const LOADING = "Loading the model on the server";
@@ -582,7 +585,11 @@ export class Agent {
     this.lookedAt = null;
     // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
-    const design = wantsUi(userInput) ? uiHint([...(this.d.stack ?? []), ...requestedStack(userInput)], fromImage(userInput)) : "";
+    // A model that sees images can check its work in a browser screenshot.
+    const screenshots = toolsForMode(this.d.tools, this.mode).some((t) => /screenshot/i.test(t.name));
+    const design = wantsUi(userInput)
+      ? uiHint([...(this.d.stack ?? []), ...requestedStack(userInput)], fromImage(userInput), { sees: config.modelSeesImages, screenshots })
+      : "";
     const projects = await projectsNamed(userInput, config.cwd).catch(() => []);
     const located = projects.length ? `(Projects here that the request may mean: ${projects.join(", ")})` : "";
     const creating = toolsForMode(this.d.tools, this.mode).some((t) => t.name === "create_project") ? newProjectHint(userInput, this.d.stack ?? []) : "";
@@ -607,10 +614,11 @@ export class Agent {
         const calls: ToolCall[] = auto.map(([name, args], i) => ({ id: `call_${Date.now()}_auto${i}`, name, arguments: JSON.stringify(args) }));
         this.messages.push({ role: "assistant", content: null, tool_calls: calls.map((c) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.arguments } })) });
         let outputs: string[] = [];
+        let images: ShownImage[] = [];
         try {
-          ({ outputs } = await this.runCalls(calls, byName, repeats, signal, runId, result));
+          ({ outputs, images } = await this.runCalls(calls, byName, repeats, signal, runId, result));
         } finally {
-          calls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
+          this.pushResults(calls, outputs, images);
         }
         // The request again, after what was looked up: seen live, with it above two long results,
         // the 7B answered with a made-up <tool_response> block.
@@ -628,6 +636,7 @@ export class Agent {
           break;
         }
         trimHistory(this.messages, config.maxContextChars);
+        dropOldImages(this.messages, MAX_IMAGES);
         // A warm-up still running means a cold start: this request waits behind it.
         this.show(this.warming ? LOADING : "Thinking");
         await this.compact(signal);
@@ -655,7 +664,7 @@ export class Agent {
         // the project: ```npx create-next-app …```"): the commands run. The step that comes first
         // in the reply is taken.
         let unsaved: string[] = [];
-        if (turn.toolCalls.length === 0) {
+        if (config.smallModelHelpers && turn.toolCalls.length === 0) {
           const exists = (p: string) => {
             const abs = path.resolve(config.cwd, p);
             return fs.existsSync(abs) && !this.starter.has(abs);
@@ -689,7 +698,7 @@ export class Agent {
         }
         // "Let's run the tests again." with no call (a small-model habit): run them, with the
         // command used before in this session, or the project's. Same permission check as ever.
-        if (turn.toolCalls.length === 0 && byName.has("bash") && RUN_TESTS.test(turn.content) && announcesAction(turn.content, true)) {
+        if (config.smallModelHelpers && turn.toolCalls.length === 0 && byName.has("bash") && RUN_TESTS.test(turn.content) && announcesAction(turn.content, true)) {
           const command = this.lastTest ?? this.d.testCommand;
           if (command) turn.toolCalls = [{ id: `call_${Date.now()}_tests`, name: "bash", arguments: JSON.stringify({ command }) }];
         }
@@ -710,7 +719,7 @@ export class Agent {
           tool_calls: turn.toolCalls.map((c) => c.name),
         });
 
-        // Cut off at the length limit (MAX_REPLY_TOKENS): its tool calls are incomplete and its code
+        // Cut off at the length limit (maxReplyTokens): its tool calls are incomplete and its code
         // unfinished. Keep only the prose (the partial code would be re-read every turn) and ask for
         // the work in parts; twice at most, then the reply stands as it is.
         if (turn.truncated && cutoffs < 2 && !turn.toolCalls.some((c) => isJsonObject(c.arguments))) {
@@ -729,7 +738,9 @@ export class Agent {
             : undefined,
         });
         if (turn.toolCalls.length === 0) {
-          if (nudges < MAX_NUDGES && offered.length && announcesAction(turn.content, stats.toolCalls > 0)) {
+          // Nudges are for small models' habits; a strong model's reply is its answer.
+          const helping = config.smallModelHelpers;
+          if (helping && nudges < MAX_NUDGES && offered.length && announcesAction(turn.content, stats.toolCalls > 0)) {
             nudges++;
             // "Let's update `src/app/layout.tsx` …": name the call (seen live, the bare nudge got the
             // same announcement back twice).
@@ -746,7 +757,7 @@ export class Agent {
             continue;
           }
           // "Understood." or nothing: once, the request again.
-          if (!answerNudged && nudges < MAX_NUDGES && ACKNOWLEDGMENT.test(turn.content)) {
+          if (helping && !answerNudged && nudges < MAX_NUDGES && ACKNOWLEDGMENT.test(turn.content)) {
             answerNudged = true;
             nudges++;
             this.messages.push({ role: "user", content: `That doesn't answer the request. Answer it now, using the tools if you need to: ${quoteRequest(userInput)}` });
@@ -755,7 +766,7 @@ export class Agent {
           }
           // "The document does not say …" before looking in the project: once, look first.
           const searched = result.calls.some((c) => SEARCH_TOOLS.includes(c.name));
-          if (!lookNudged && nudges < MAX_NUDGES && !searched && GIVES_UP.test(turn.content) && SEARCH_TOOLS.some((t) => byName.has(t))) {
+          if (helping && !lookNudged && nudges < MAX_NUDGES && !searched && GIVES_UP.test(turn.content) && SEARCH_TOOLS.some((t) => byName.has(t))) {
             lookNudged = true;
             nudges++;
             const how = SEARCH_TOOLS.filter((t) => byName.has(t)).join(", ");
@@ -774,7 +785,7 @@ export class Agent {
           }
           // Asked to build something, the reply is steps and code for the user ("Step 2: Create a
           // new file … and add the following code"). Twice per request at most.
-          if (changeWanted && tutorialNudges < 2 && nudges < MAX_NUDGES && TUTORIAL.test(turn.content) && /```|\bstep \d/i.test(turn.content)) {
+          if (helping && changeWanted && tutorialNudges < 2 && nudges < MAX_NUDGES && TUTORIAL.test(turn.content) && /```|\bstep \d/i.test(turn.content)) {
             const tools = ["create_project", "write_file", "edit_file", "bash"].filter((t) => byName.has(t));
             if (tools.length) {
               tutorialNudges++;
@@ -792,7 +803,7 @@ export class Agent {
           const changed = result.calls.some((c) => c.ok && this.d.tools.find((t) => t.name === c.name)?.risk === "write");
           // Once per request, even after other nudges (seen live: two "go on" nudges used the budget
           // and the run ended with nothing built).
-          if (changeWanted && !changeNudged && !changed && offered.some((t) => t.risk === "write")) {
+          if (helping && changeWanted && !changeNudged && !changed && offered.some((t) => t.risk === "write")) {
             changeNudged = true;
             nudges++;
             this.messages.push({ role: "user", content: CHANGE_NUDGE });
@@ -808,11 +819,12 @@ export class Agent {
             const call: ToolCall = { id: `call_${Date.now()}_check`, name: "bash", arguments: JSON.stringify({ command: check }) };
             this.messages.push({ role: "assistant", content: null, tool_calls: [{ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }] });
             let outputs: string[] = [];
+            let images: ShownImage[] = [];
             let declined = false;
             try {
-              ({ outputs, declined } = await this.runCalls([call], byName, repeats, signal, runId, result));
+              ({ outputs, declined, images } = await this.runCalls([call], byName, repeats, signal, runId, result));
             } finally {
-              this.messages.push({ role: "tool", tool_call_id: call.id, content: outputs[0] ?? "Error: the tool did not run." });
+              this.pushResults([call], outputs, images);
             }
             if (!declined && !signal.aborted && !(outputs[0] ?? "").startsWith("exit code 0")) {
               this.messages.push({ role: "user", content: `(Ngobe ran ${check} to check the work, and it failed. Fix what it reports with edit_file or write_file, then run it again.)` });
@@ -830,12 +842,12 @@ export class Agent {
           break;
         }
         let outputs: string[] = [];
+        let images: ShownImage[] = [];
         let declined = false;
         try {
-          ({ outputs, declined } = await this.runCalls(turn.toolCalls, byName, repeats, signal, runId, result));
+          ({ outputs, declined, images } = await this.runCalls(turn.toolCalls, byName, repeats, signal, runId, result));
         } finally {
-          // Every tool_call needs a matching tool message, even when cancelled or on an internal error.
-          turn.toolCalls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
+          this.pushResults(turn.toolCalls, outputs, images);
         }
         // Progress resets the nudge budget: two nudges per stall, not per request.
         if (outputs.some((o) => !o.startsWith("Error:"))) nudges = 0;
@@ -878,11 +890,12 @@ export class Agent {
     signal: AbortSignal,
     runId: string,
     result: RunResult,
-  ): Promise<{ outputs: string[]; declined: boolean }> {
+  ): Promise<{ outputs: string[]; declined: boolean; images: ShownImage[] }> {
     const prepared = calls.map((c) => this.prepare(c, byName, repeats));
     const quiet = (p: Prepared) =>
       !p.failure && p.tool && (p.tool.risk === "safe" || p.tool.risk === "network") && needOf(p.tool, p.args!, { cwd: this.d.config.cwd, request: this.request }) === "none";
     const outputs: string[] = new Array(calls.length);
+    const shown: ShownImage[][] = new Array(calls.length);
     let declined = false;
 
     if (prepared.length > 1 && prepared.every(quiet)) {
@@ -892,7 +905,7 @@ export class Agent {
       const worker = async () => {
         while (next < prepared.length) {
           const i = next++;
-          outputs[i] = (await this.execute(prepared[i], signal, runId, result, false, repeats)).output;
+          ({ output: outputs[i], images: shown[i] } = await this.execute(prepared[i], signal, runId, result, false, repeats));
         }
       };
       await Promise.all(Array.from({ length: Math.min(PARALLEL, prepared.length) }, worker));
@@ -911,10 +924,20 @@ export class Agent {
         }
         const r = await this.execute(prepared[i], signal, runId, result, true, repeats);
         outputs[i] = r.output;
+        shown[i] = r.images;
         declined ||= r.declined;
       }
     }
-    return { outputs, declined };
+    return { outputs, declined, images: shown.flat() };
+  }
+
+  /**
+   * A turn's results: a tool message for every call (even when cancelled or on an internal error),
+   * then the images the calls showed, in a message of their own (tool messages can't carry images).
+   */
+  private pushResults(calls: ToolCall[], outputs: string[], images: ShownImage[]): void {
+    calls.forEach((c, i) => this.messages.push({ role: "tool", tool_call_id: c.id, content: outputs[i] ?? "Error: the tool did not run." }));
+    if (images.length) this.messages.push(imagesMessage(images));
   }
 
   private prepare(call: ToolCall, byName: Map<string, Tool>, repeats: Map<string, number>): Prepared {
@@ -966,7 +989,7 @@ export class Agent {
     result: RunResult,
     announce: boolean,
     repeats: Map<string, number>,
-  ): Promise<{ output: string; declined: boolean }> {
+  ): Promise<{ output: string; declined: boolean; images: ShownImage[] }> {
     const { ui, perms, config, memory, log } = this.d;
     const started = Date.now();
     const name = p.tool?.name ?? p.call.name;
@@ -975,6 +998,8 @@ export class Agent {
     let failure: ToolFailure | null = p.failure ?? null;
     /** What the tool said about itself for the transcript (an edit's real diff). */
     let reported: { summary: string; preview?: PreviewLine[] } | undefined;
+    /** Images the tool showed, for a model that sees them. */
+    const attached: ToolImage[] = [];
 
     if (!failure) {
       const tool = p.tool!;
@@ -989,7 +1014,8 @@ export class Agent {
     } else {
       try {
         const limit = toolOutputLimit(config.maxContextChars);
-        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, { ...this.context(s), report: (v) => (reported = v) }), signal), limit);
+        const attach = config.modelSeesImages ? (image: ToolImage) => attached.push(image) : undefined;
+        output = truncate(await withTimeout(p.tool!, (s) => p.tool!.run(p.args!, { ...this.context(s), report: (v) => (reported = v), attach }), signal), limit);
       } catch (err) {
         failure = err instanceof ToolFailure ? err : new ToolFailure(signal.aborted ? "cancelled" : "failed", err instanceof Error ? err.message : String(err));
         // Error text goes back to the model so it can correct itself.
@@ -1025,7 +1051,8 @@ export class Agent {
       shown = defaultSummary(output);
     }
     ui.toolUpdate({ ...view, state: !failure ? "ok" : failure.kind === "denied" ? "declined" : "error", ...shown });
-    return { output, declined: failure?.kind === "denied" };
+    const label = view.target ? `${view.label}(${view.target})` : view.label;
+    return { output, declined: failure?.kind === "denied", images: failure ? [] : attached.map((image) => ({ label, image })) };
   }
 
   /**

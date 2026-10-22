@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { extractDocument, human, MAX_LOAD } from "../documents.js";
 import type { Tool } from "../types.js";
-import { describeImage } from "../vision.js";
+import { describeImage, showImage } from "../vision.js";
 import { wantsUi } from "../design.js";
 import { toolOutputLimit } from "../context.js";
 import { didYouMean, hashText, isOutsideProject, isSecretPath, mentionsPath, optInt, reqStr, resolveReadable, similarPaths } from "./util.js";
@@ -60,7 +60,12 @@ export const readFile: Tool = {
     const buf = stat.size > MAX_LOAD ? await readStart(abs, MAX_LOAD) : await fs.readFile(abs);
 
     const config = ctx.config;
-    const doc = await extractDocument(abs, buf, stat.size, config?.visionModel ? { vision: (f, b) => describeImage(config, f, b, ctx.signal, wantsUi(ctx.request ?? "") ? "ui" : "general") } : {});
+    const purpose = wantsUi(ctx.request ?? "") ? "ui" : "general";
+    const attach = ctx.attach;
+    const doc = await extractDocument(abs, buf, stat.size, {
+      show: attach && ((f, b) => showImage(f, b, attach, purpose)),
+      vision: config?.visionModel ? (f, b) => describeImage(config, f, b, ctx.signal, purpose) : undefined,
+    });
     let text: string;
     let header = "";
     if (doc) {
