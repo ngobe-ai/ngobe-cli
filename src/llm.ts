@@ -343,10 +343,11 @@ export function rejectsTools(err: unknown): boolean {
   return err instanceof OpenAI.APIError && (err.status ?? 0) >= 400 && /tool/i.test(err.message);
 }
 
+/** Worth trying the fallback model: missing, unreachable, silent, or busy (free gateways answer "overloaded" with 429 or 500). */
 function isUnavailable(err: unknown): boolean {
   return (
     err instanceof ModelTimeoutError ||
     err instanceof OpenAI.APIConnectionError ||
-    (err instanceof OpenAI.APIError && [404, 502, 503, 504].includes(err.status ?? 0))
+    (err instanceof OpenAI.APIError && [404, 429, 500, 502, 503, 504, 529].includes(err.status ?? 0))
   );
 }

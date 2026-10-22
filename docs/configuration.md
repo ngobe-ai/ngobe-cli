@@ -13,7 +13,7 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 | `NGOBE_BASE_URL` / `--base-url` | `baseURL` | `http://localhost:11434/v1` | OpenAI-compatible endpoint. Docker Model Runner: `http://localhost:12434/engines/v1`; llama.cpp server: `http://localhost:8080/v1` |
 | `NGOBE_API_KEY` | (env only) | `not-needed` | Key for hosted providers. Without one, no `Authorization` header is sent |
 | `NGOBE_MODEL` / `-m` | `model` | `qwen3-coder` | Model id as the endpoint names it (`docker model ls`, `/v1/models`) |
-| `NGOBE_FALLBACK_MODEL` | `fallbackModel` | none | Tried once when the main model is missing, unreachable or silent |
+| `NGOBE_FALLBACK_MODEL` | `fallbackModel` | none | Tried once when the main model is missing, unreachable, silent or busy (429/500/503: free gateways answer "overloaded") |
 | `NGOBE_KEEP_WARM_MINUTES` | `keepWarmMinutes` | `30` | While a chat is open and you were active within this many minutes, keep the model loaded and the conversation cached on the server (a one-token request every ~3.5 minutes, before Docker Model Runner's 5-minute unload). After that the server may unload it. `0` turns it off |
 | `NGOBE_TEMPERATURE` | `temperature` | `0.2` | Sampling temperature, 0 to 2. Low keeps a small model's tool calls steady (llama.cpp's own default is 0.8); `default` leaves it to the server. Dropped automatically if the server refuses it |
 | `NGOBE_WARMUP` | `warmup` | `true` | In the chat, have the server process the fixed prompt prefix (system prompt + tools) while you type: at start, and when you start typing after 2 idle minutes (Docker Model Runner unloads idle models after ~5). Costs one short request; set `false` on a metered API |
@@ -56,6 +56,7 @@ The defaults suit a small model on a CPU. For a strong hosted model (for example
   "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
   "fallbackModel": "nvidia/nemotron-3-super-120b-a12b:free",
   "visionModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "maxRetries": 4,
   "smallModelHelpers": false,
   "maxReplyTokens": 16000,
   "maxContextChars": 400000,

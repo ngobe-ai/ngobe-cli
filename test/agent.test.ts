@@ -1128,6 +1128,16 @@ describe("model gateway", () => {
     expect(turn).toMatchObject({ content: "from fallback", model: "backup" });
   });
 
+  test.each([429, 500])("an overloaded main model (HTTP %i, as free gateways answer) falls back too", async (status) => {
+    const model = fakeModel([{ content: "from fallback" }], (body) =>
+      body.model === "busy" ? new Response(JSON.stringify({ error: { message: "Upstream error from Nvidia: Service temporarily overloaded" } }), { status }) : undefined,
+    );
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, maxRetries: 0, model: "busy", fallbackModel: "backup" });
+    const turn = await new LLM(config).chat([{ role: "user", content: "hi" }], [], () => {});
+    expect(turn).toMatchObject({ content: "from fallback", model: "backup" });
+  });
+
   test("estimates tokens when the server reports no usage", async () => {
     const model = fakeModel([{ content: "x".repeat(40) }]);
     stops.push(model.stop);
