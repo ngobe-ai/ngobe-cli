@@ -165,7 +165,7 @@ function backoff(attempt: number): number {
   return 500 * 2 ** attempt + Math.random() * 250;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(resolve, ms);
     signal?.addEventListener(

@@ -1138,6 +1138,29 @@ describe("model gateway", () => {
     expect(turn).toMatchObject({ content: "from fallback", model: "backup" });
   });
 
+  /** A gateway's error inside a 200 stream (the SDK raises it with no status). */
+  const overloadedStream = () =>
+    new Response(`data: ${JSON.stringify({ error: { message: "Upstream error from Nvidia: Service temporarily overloaded", code: 502 } })}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+
+  test("an overload reported inside the stream is tried again on the same model after a pause", async () => {
+    const model = fakeModel([{ content: "ok" }], (_body, n) => (n === 1 ? overloadedStream() : undefined));
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, maxRetries: 1, model: "busy", fallbackModel: "backup" });
+    const turn = await new LLM(config).chat([{ role: "user", content: "hi" }], [], () => {});
+    expect(turn).toMatchObject({ content: "ok", model: "busy" });
+    expect(model.requests.map((r) => r.model)).toEqual(["busy", "busy"]);
+  });
+
+  test("an overload reported inside the stream that lasts falls back to the fallback model", async () => {
+    const model = fakeModel([{ content: "from fallback" }], (body) => (body.model === "busy" ? overloadedStream() : undefined));
+    stops.push(model.stop);
+    const config = testConfig({ baseURL: model.baseURL, maxRetries: 0, model: "busy", fallbackModel: "backup" });
+    const turn = await new LLM(config).chat([{ role: "user", content: "hi" }], [], () => {});
+    expect(turn).toMatchObject({ content: "from fallback", model: "backup" });
+  });
+
   test("estimates tokens when the server reports no usage", async () => {
     const model = fakeModel([{ content: "x".repeat(40) }]);
     stops.push(model.stop);

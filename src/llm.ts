@@ -3,6 +3,7 @@ import type { Config } from "./config.js";
 import type { Message, Tool } from "./types.js";
 import { parseTextToolCalls, textProtocolPrompt, toTextMessages, visibleLength } from "./toolProtocol.js";
 import { ensureTunnel } from "./tunnel.js";
+import { sleep } from "./web/http.js";
 
 export interface ToolCall {
   id: string;
@@ -153,13 +154,42 @@ export class LLM {
         this.onNotice("The endpoint refused native tool calling; using the text tool protocol for this session.");
         return this.attempt(this.cfg.model, messages, tools, onText, signal);
       }
+      let failure = err;
+      if (busyInStream(err)) {
+        try {
+          return await this.retryBusy(err, () => this.attempt(this.cfg.model, messages, tools, onText, signal), signal);
+        } catch (again) {
+          if (signal?.aborted) throw again;
+          failure = again;
+        }
+      }
       const fallback = this.cfg.fallbackModel;
-      if (fallback && fallback !== this.cfg.model && isUnavailable(err)) {
-        this.onNotice(`${this.cfg.model} failed (${errorText(err)}); trying fallback model ${fallback}.`);
+      if (fallback && fallback !== this.cfg.model && isUnavailable(failure)) {
+        this.onNotice(`${this.cfg.model} failed (${errorText(failure)}); trying fallback model ${fallback}.`);
         return this.attempt(fallback, messages, tools, onText, signal);
       }
-      throw err;
+      throw failure;
     }
+  }
+
+  /**
+   * A busy free gateway says so inside the stream, where the SDK doesn't retry: the same model again
+   * after a pause (2 s, 4 s, 8 s …), maxRetries times, while it stays busy.
+   */
+  private async retryBusy(err: unknown, run: () => Promise<AssistantTurn>, signal?: AbortSignal): Promise<AssistantTurn> {
+    let last = err;
+    for (let i = 0; i < this.cfg.maxRetries && busyInStream(last); i++) {
+      const seconds = 2 ** (i + 1);
+      this.onNotice(`${this.cfg.model} is busy (${errorText(last)}); trying again in ${seconds}s.`);
+      await sleep(seconds * 1000, signal);
+      try {
+        return await run();
+      } catch (again) {
+        if (signal?.aborted) throw again;
+        last = again;
+      }
+    }
+    throw last;
   }
 
   private async attempt(
@@ -348,6 +378,14 @@ function isUnavailable(err: unknown): boolean {
   return (
     err instanceof ModelTimeoutError ||
     err instanceof OpenAI.APIConnectionError ||
+    busyInStream(err) ||
     (err instanceof OpenAI.APIError && [404, 429, 500, 502, 503, 504, 529].includes(err.status ?? 0))
   );
+}
+
+const BUSY = /overloaded|temporarily unavailable|capacity|rate.?limit|too many requests|try again/i;
+
+/** "Service temporarily overloaded" sent inside a 200 stream (the SDK raises it with no status). */
+function busyInStream(err: unknown): boolean {
+  return err instanceof OpenAI.APIError && err.status === undefined && BUSY.test(err.message);
 }
