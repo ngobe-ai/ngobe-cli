@@ -170,7 +170,8 @@ describe("secrets stay out of tools, logs and memory", () => {
       delete process.env.NGOBE_API_KEY;
     }
     expect(fs.existsSync(leak)).toBe(false);
-  });
+    // pip show takes over 5 s now and then on GitHub's Ubuntu runners (failed CI twice on 2026-10-22).
+  }, 30_000);
 
   test("git_diff leaves out secret files", async () => {
     const cwd = tmpDir();
