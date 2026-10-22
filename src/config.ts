@@ -161,7 +161,7 @@ Options:
   -h, --help             show this help
 
 Environment (NGOBE_* first, MUGAMBA_* still read as a fallback):
-  NGOBE_BASE_URL, NGOBE_API_KEY, NGOBE_MODEL, NGOBE_FALLBACK_MODEL, NGOBE_TOOL_MODE,
+  NGOBE_BASE_URL, NGOBE_API_KEY, NGOBE_KEYLESS (1 = never send a key), NGOBE_MODEL, NGOBE_FALLBACK_MODEL, NGOBE_TOOL_MODE,
   NGOBE_TOOL_PROFILE (lean | full),
   NGOBE_SSH_TUNNEL (user@host:port), NGOBE_SSH_TUNNEL_TARGET (default 127.0.0.1:<baseURL port>),
   NGOBE_MODE, NGOBE_MAX_TURNS, NGOBE_MAX_TOOL_CALLS, NGOBE_MAX_RUN_SECONDS,
@@ -331,10 +331,15 @@ export function loadConfig(argv: string[] = process.argv.slice(2), env: Env = pr
   const tavilyApiKey = envVar(env, "TAVILY_API_KEY") ?? env.TAVILY_API_KEY ?? "";
   const searxngURL = String(envVar(env, "SEARXNG_URL") ?? file.searxngURL ?? "");
   const searxngKey = envVar(env, "SEARXNG_KEY") ?? "";
+  // An endpoint that takes no key never gets one: a key left in the shell for another endpoint
+  // (an old terminal after switching configs) would otherwise go to this host.
+  const keyless = bool(setting("KEYLESS", "keyless").raw, false);
+  const envKey = envVar(env, "API_KEY");
+  if (keyless && envKey) warnings.push(`NGOBE_API_KEY is set but not sent: "keyless" says ${configFilePath(env)}'s endpoint takes no key`);
 
   const config: Config = {
     baseURL: String(setting("BASE_URL", "baseURL", values["base-url"]).raw ?? "http://localhost:11434/v1"),
-    apiKey: envVar(env, "API_KEY") ?? "not-needed",
+    apiKey: keyless ? "not-needed" : (envKey ?? "not-needed"),
     model: String(setting("MODEL", "model", values.model).raw ?? "qwen3-coder"),
     fallbackModel: String(setting("FALLBACK_MODEL", "fallbackModel").raw ?? ""),
     sshTunnel: String(setting("SSH_TUNNEL", "sshTunnel").raw ?? ""),

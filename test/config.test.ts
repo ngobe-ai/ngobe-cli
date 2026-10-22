@@ -29,6 +29,14 @@ describe("config", () => {
     expect([c.modelSeesImages, c.smallModelHelpers, c.maxReplyTokens]).toEqual([true, false, 32000]);
   });
 
+  test("keyless: a key left in the shell is never sent to an endpoint that takes none", () => {
+    const { env } = home();
+    expect(loadConfig([], { ...env, NGOBE_API_KEY: "sk-for-another-endpoint" }).config.apiKey).toBe("sk-for-another-endpoint");
+    const loaded = loadConfig([], { ...env, NGOBE_API_KEY: "sk-for-another-endpoint", NGOBE_KEYLESS: "1" });
+    expect(loaded.config.apiKey).toBe("not-needed");
+    expect(loaded.warnings.join()).toContain("NGOBE_API_KEY is set but not sent");
+  });
+
   test("errors name the variable that was actually set", () => {
     const { env } = home();
     expect(() => loadConfig([], { ...env, MUGAMBA_MAX_TURNS: "abc" })).toThrow("MUGAMBA_MAX_TURNS");

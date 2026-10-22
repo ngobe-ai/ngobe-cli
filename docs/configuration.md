@@ -12,6 +12,7 @@ The config file is `$XDG_CONFIG_HOME/ngobe/config.json` (default `~/.config/ngob
 |---|---|---|---|
 | `NGOBE_BASE_URL` / `--base-url` | `baseURL` | `http://localhost:11434/v1` | OpenAI-compatible endpoint. Docker Model Runner: `http://localhost:12434/engines/v1`; llama.cpp server: `http://localhost:8080/v1` |
 | `NGOBE_API_KEY` | (env only) | `not-needed` | Key for hosted providers. Without one, no `Authorization` header is sent |
+| `NGOBE_KEYLESS` | `keyless` | `false` | The endpoint takes no key: `NGOBE_API_KEY` is never sent to it, even when set (a key left in a terminal for another endpoint must not reach this host) |
 | `NGOBE_MODEL` / `-m` | `model` | `qwen3-coder` | Model id as the endpoint names it (`docker model ls`, `/v1/models`) |
 | `NGOBE_FALLBACK_MODEL` | `fallbackModel` | none | Tried once when the main model is missing, unreachable, silent or busy (429/500/503: free gateways answer "overloaded") |
 | `NGOBE_KEEP_WARM_MINUTES` | `keepWarmMinutes` | `30` | While a chat is open and you were active within this many minutes, keep the model loaded and the conversation cached on the server (a one-token request every ~3.5 minutes, before Docker Model Runner's 5-minute unload). After that the server may unload it. `0` turns it off |
@@ -48,11 +49,12 @@ The defaults suit a small model on a CPU. For a strong hosted model (for example
 
 `modelSeesImages` only if the model reads images. `keepWarmMinutes: 0` and `warmup: false` stop requests that only keep a local server's cache warm; on a hosted API they spend your rate limit. With the Playwright MCP server (below) and `modelSeesImages`, a UI built from an image is checked against a screenshot of the result.
 
-**Free, with no account:** Kilo's AI Gateway serves its free models to anonymous users (200 requests per hour per IP address, 2026-10-22). Leave `NGOBE_API_KEY` unset: without a key ngobe sends no `Authorization` header, and the gateway refuses a made-up one. Checked live 2026-10-22: `nvidia/nemotron-3-ultra-550b-a55b:free` (SWE-bench Verified 69.0% on Vals AI) answered with a native tool call; `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` read the text and color of a button in an image. The main model doesn't see images, so the vision model describes them, Playwright screenshots included:
+**Free, with no account:** Kilo's AI Gateway serves its free models to anonymous users (200 requests per hour per IP address, 2026-10-22). Set `"keyless": true`: ngobe then sends no `Authorization` header, even if a terminal still has `NGOBE_API_KEY` from another endpoint (the gateway refuses a made-up key, and another endpoint's key must not reach it). Checked live 2026-10-22: `nvidia/nemotron-3-ultra-550b-a55b:free` (SWE-bench Verified 69.0% on Vals AI) answered with a native tool call; `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` read the text and color of a button in an image. The main model doesn't see images, so the vision model describes them, Playwright screenshots included:
 
 ```json
 {
   "baseURL": "https://ai-gateway.kilo.ai/api/v1",
+  "keyless": true,
   "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
   "fallbackModel": "nvidia/nemotron-3-super-120b-a12b:free",
   "visionModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, openrouter/free",
