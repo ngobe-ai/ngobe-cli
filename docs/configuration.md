@@ -55,7 +55,7 @@ The defaults suit a small model on a CPU. For a strong hosted model (for example
   "baseURL": "https://ai-gateway.kilo.ai/api/v1",
   "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
   "fallbackModel": "nvidia/nemotron-3-super-120b-a12b:free",
-  "visionModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "visionModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, openrouter/free",
   "maxRetries": 4,
   "smallModelHelpers": false,
   "maxReplyTokens": 16000,
@@ -67,7 +67,7 @@ The defaults suit a small model on a CPU. For a strong hosted model (for example
 }
 ```
 
-Free models change without notice (check `https://ai-gateway.kilo.ai/api/v1/models`), and the providers behind them may log prompts: NVIDIA's free endpoints log use to improve their products. Don't send code you can't share.
+Playwright marks `browser_navigate`, `browser_click`, `browser_type` and `browser_resize` destructive, so ngobe asks before each one, in every mode; `"autoApprove": ["browser_navigate", "browser_resize"]` on the server lets it open and size pages to check them, while clicks and typing still ask. Free models change without notice (check `https://ai-gateway.kilo.ai/api/v1/models`), and the providers behind them may log prompts: NVIDIA's free endpoints log use to improve their products. Don't send code you can't share.
 
 ### Models on your own server, used from your laptop
 
@@ -190,7 +190,7 @@ Other Claude Code fields (`permissionMode`, `skills`, `hooks`, …) are ignored,
 |---|---|---|---|
 | `NGOBE_MEMORY` | `memory` | `1` | `0` turns memory off completely (nothing opened or written, NGOBE.md included) |
 | `NGOBE_MEMORY_FILE` | (environment only) | `<config dir>/NGOBE.md` | Ngobe's global memory: about you, lessons, and what was done in each project. Plain markdown; edit it freely |
-| `NGOBE_VISION_MODEL` | `visionModel` | (none) | A vision model on the same server (e.g. `docker.io/ngobe/qwen3-vl-2b:6k`). `read_file` on an image sends it there and gives the coding model the transcribed text and a description. Without one, images get OCR when tesseract is installed. Not used when `modelSeesImages` is on (the model sees the image itself) |
+| `NGOBE_VISION_MODEL` | `visionModel` | (none) | A vision model on the same server (e.g. `docker.io/ngobe/qwen3-vl-2b:6k`). `read_file` on an image sends it there and gives the coding model the transcribed text and a description. Without one, images get OCR when tesseract is installed. Several, comma-separated, are tried in order (a free one is often busy). With `smallModelHelpers` off it gets `maxReplyTokens` to think in (hosted vision models reason first); otherwise 700–900 tokens. Not used when `modelSeesImages` is on (the model sees the image itself) |
 | `NGOBE_MOUSE` | `mouse` | `1` | The chat takes the mouse wheel to scroll the conversation. `0` leaves the mouse to the terminal (native selection; scroll with PgUp/PgDn) |
 | `NGOBE_STATE_DIR` | `stateDir` | `$XDG_STATE_HOME/ngobe` (`~/.local/state/ngobe`) | `ngobe.db` (memory) and `logs/` (JSONL audit log, 14 days) |
 | `NGOBE_CACHE_DIR` | `cacheDir` | `$XDG_CACHE_HOME/ngobe` (`~/.cache/ngobe`) | HTTP cache; safe to delete |

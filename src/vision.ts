@@ -56,19 +56,43 @@ const MAX_SIDE = 1280;
 const MAX_DIRECT = 1_500_000;
 
 /** What the vision model says about the image, or null when it can't be sent. Throws on server errors. */
+/** The vision models in order: visionModel may list several, comma-separated, for when one is busy. */
+export function visionModels(config: Pick<Config, "visionModel">): string[] {
+  return config.visionModel.split(",").map((m) => m.trim()).filter(Boolean);
+}
+
+/** What the vision model says about the image (the next one is asked when one fails), or null when it can't be sent. Throws when all fail. */
 export async function describeImage(config: Config, file: string, buf: Uint8Array, signal?: AbortSignal, purpose: "general" | "ui" = "general"): Promise<string | null> {
-  if (!config.visionModel) return null;
+  const models = visionModels(config);
+  if (!models.length) return null;
   const image = await prepare(file, buf);
   if (!image) return null;
+  let failure: unknown = null;
+  for (const model of models) {
+    try {
+      const seen = await askVision(config, model, image, signal, purpose);
+      if (seen) return purpose === "ui" ? `${seen}${await paletteNote(file)}` : seen;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      failure = err;
+    }
+  }
+  if (failure) throw failure;
+  return null;
+}
+
+async function askVision(config: Config, model: string, image: { mime: string; data: Buffer }, signal: AbortSignal | undefined, purpose: "general" | "ui"): Promise<string> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (config.apiKey && config.apiKey !== "not-needed") headers.authorization = `Bearer ${config.apiKey}`;
   const res = await fetch(`${config.baseURL.replace(/\/+$/, "")}/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: config.visionModel,
+      model,
       stream: false,
-      max_tokens: purpose === "ui" ? 900 : 700,
+      // A small local vision model is capped tight (it falls into loops, at a few tokens a second); a
+      // hosted one may think first, and seen live, a 900-token cap went to thinking with no answer.
+      max_tokens: config.smallModelHelpers ? (purpose === "ui" ? 900 : 700) : config.maxReplyTokens,
       temperature: 0.1,
       frequency_penalty: 0.3, // small vision models fall into repeating a line
       messages: [{ role: "user", content: [{ type: "text", text: purpose === "ui" ? UI_PROMPT : PROMPT }, { type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data.toString("base64")}` } }] }],
@@ -77,11 +101,9 @@ export async function describeImage(config: Config, file: string, buf: Uint8Arra
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
     timeout: false,
   } as RequestInit);
-  if (!res.ok) throw new Error(`vision model ${config.visionModel}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw new Error(`vision model ${model}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const seen = dropRepeats(json.choices?.[0]?.message?.content?.trim() ?? "");
-  if (!seen) return null;
-  return purpose === "ui" ? `${seen}${await paletteNote(file)}` : seen;
+  return dropRepeats(json.choices?.[0]?.message?.content?.trim() ?? "");
 }
 
 /** The image's colors measured from the pixels (models, seeing or not, guess hex values badly); "" without ImageMagick. */

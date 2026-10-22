@@ -249,6 +249,38 @@ describe("images, with a vision model", () => {
     }
   });
 
+  test("a hosted vision model gets room to think first; a small local one keeps a tight cap", async () => {
+    const model = fakeModel([{ content: "A login form." }]);
+    const cwd = tmpDir();
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
+    fs.writeFileSync(path.join(cwd, "form.png"), png);
+    try {
+      await readFile.run({ path: "form.png" }, { cwd, config: testConfig({ baseURL: model.baseURL, cwd, visionModel: "v" }) });
+      await readFile.run({ path: "form.png" }, { cwd, config: testConfig({ baseURL: model.baseURL, cwd, visionModel: "v", smallModelHelpers: false, maxReplyTokens: 16000 }) });
+      expect(model.requests.map((r) => r.max_tokens)).toEqual([700, 16000]);
+    } finally {
+      model.stop();
+    }
+  });
+
+  test("visionModel can list several: the next is asked when one is busy", async () => {
+    const model = fakeModel([{ content: "A login form with a blue 'Sign in' button." }], (body) =>
+      body.model === "busy-vision" ? new Response(JSON.stringify({ error: { message: "ResourceExhausted: Worker local total request limit reached" } }), { status: 502 }) : undefined,
+    );
+    const cwd = tmpDir();
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
+    fs.writeFileSync(path.join(cwd, "form.png"), png);
+    try {
+      const out = await readFile.run({ path: "form.png" }, { cwd, config: testConfig({ baseURL: model.baseURL, cwd, visionModel: "busy-vision, backup-vision" }) });
+      expect(out).toContain("'Sign in' button");
+      expect(model.requests.map((r) => r.model)).toEqual(["busy-vision", "backup-vision"]);
+    } finally {
+      model.stop();
+    }
+  });
+
   test("without a vision model, an image is still described from its header", async () => {
     const cwd = tmpDir();
     const png = new Uint8Array(33);

@@ -12,6 +12,7 @@ import { bold, dim, green, red, yellow } from "./ui.js";
 import { httpJson } from "./web/http.js";
 import { updateNotice } from "./update.js";
 import { webSearch } from "./web/search.js";
+import { visionModels } from "./vision.js";
 
 const ok = (s: string) => `${green("✓")} ${s}`;
 const bad = (s: string) => `${red("✗")} ${s}`;
@@ -63,9 +64,9 @@ export async function cmdDoctor(loaded: LoadedConfig): Promise<number> {
     console.log(`${bold("model  ")} ${ok(`${config.baseURL} reachable (${ms} ms, ${where})`)}`);
     const ids = models.map((m) => m.id);
     if (ids.length) console.log(dim(`         serves: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ` (+${ids.length - 8})` : ""}`));
-    if (config.visionModel) {
-      const served = ids.some((id) => id === config.visionModel || id.endsWith(`/${config.visionModel}`));
-      console.log(`${bold("vision ")} ${served ? ok(`${config.visionModel} describes images for the model`) : warn(`${config.visionModel} is not on this server; images get OCR at most`)}`);
+    for (const vision of visionModels(config)) {
+      const served = ids.some((id) => id === vision || id.endsWith(`/${vision}`));
+      console.log(`${bold("vision ")} ${served ? ok(`${vision} describes images for the model`) : warn(`${vision} is not on this server; images get OCR at most`)}`);
     }
   } catch (err) {
     healthy = false;
