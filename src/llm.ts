@@ -383,7 +383,9 @@ function isUnavailable(err: unknown): boolean {
   );
 }
 
-const BUSY = /overloaded|temporarily unavailable|capacity|rate.?limit|too many requests|try again/i;
+// Seen from Kilo's free NVIDIA models (2026-10-22): "Service temporarily overloaded", "Upstream idle
+// timeout exceeded", "ResourceExhausted: Worker local total request limit reached (16/16)".
+const BUSY = /overloaded|temporarily unavailable|capacity|rate.?limit|too many requests|try again|timeout|timed out|resource.?exhausted|request limit/i;
 
 /** "Service temporarily overloaded" sent inside a 200 stream (the SDK raises it with no status). */
 function busyInStream(err: unknown): boolean {

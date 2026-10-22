@@ -1153,6 +1153,19 @@ describe("model gateway", () => {
     expect(model.requests.map((r) => r.model)).toEqual(["busy", "busy"]);
   });
 
+  test.each(["Upstream idle timeout exceeded", "Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (16/16)"])(
+    "a busy free gateway's other words are retried too: %s",
+    async (message) => {
+      const model = fakeModel([{ content: "ok" }], (_body, n) =>
+        n === 1 ? new Response(`data: ${JSON.stringify({ error: { message } })}\n\n`, { headers: { "content-type": "text/event-stream" } }) : undefined,
+      );
+      stops.push(model.stop);
+      const config = testConfig({ baseURL: model.baseURL, maxRetries: 1, model: "busy" });
+      const turn = await new LLM(config).chat([{ role: "user", content: "hi" }], [], () => {});
+      expect(turn.content).toBe("ok");
+    },
+  );
+
   test("an overload reported inside the stream that lasts falls back to the fallback model", async () => {
     const model = fakeModel([{ content: "from fallback" }], (body) => (body.model === "busy" ? overloadedStream() : undefined));
     stops.push(model.stop);
