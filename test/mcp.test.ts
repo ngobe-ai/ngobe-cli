@@ -8,7 +8,7 @@ import { firstSentence, mcpNeed, mcpToolName, modelSchema, resultText, toTool } 
 import { createSession } from "../src/session.js";
 import { trustFolder } from "../src/trust.js";
 import type { ToolImage } from "../src/types.js";
-import { handler, TOOLS } from "./fixtures/mcpServer.js";
+import { handler, IMAGE_PNG, TOOLS } from "./fixtures/mcpServer.js";
 import { fakeModel, recordingUi, testConfig, tmpDir } from "./helpers.js";
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "mcpServer.ts");
@@ -160,7 +160,19 @@ describe("stdio", () => {
     expect(await image.run({}, { cwd: "." })).toContain("not shown to the model");
     const attached: ToolImage[] = [];
     expect(await image.run({}, { cwd: ".", attach: (i) => attached.push(i) })).toContain("shown to you after the tool results");
-    expect(attached).toEqual([{ mime: "image/png", data: Buffer.alloc(3000).toString("base64") }]);
+    expect(attached).toEqual([{ mime: "image/png", data: IMAGE_PNG }]);
+  });
+
+  test("a tool's image is described by the vision model for a model that can't see", async () => {
+    const vision = fakeModel([{ content: "A login page: a blue 'Sign in' button under two fields." }]);
+    cleanups.push(vision.stop);
+    const client = await connected(stdioSpec("modern"));
+    const { tools } = await client.listTools();
+    const image = toTool(client, tools.find((t) => t.name === "image")!, true);
+    const out = await image.run({}, { cwd: ".", config: testConfig({ baseURL: vision.baseURL, visionModel: "vision-model" }) });
+    expect(out).toContain("'Sign in' button");
+    expect(vision.requests[0].model).toBe("vision-model");
+    expect(JSON.stringify(vision.requests[0].messages)).toContain(`data:image/png;base64,${IMAGE_PNG}`);
   });
 
   test("the server gets its configured env, but not ngobe's credentials", async () => {

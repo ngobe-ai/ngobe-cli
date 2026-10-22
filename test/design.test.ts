@@ -37,8 +37,9 @@ describe("building a UI from an image", () => {
     expect(uiHint([], true, { sees: true })).toMatch(/you can see the image/i);
     expect(uiHint([], true, { sees: true, screenshots: true })).toMatch(/screenshot.*compare it with the image/i);
     expect(uiHint([], false, { sees: true, screenshots: true })).toMatch(/screenshot/i);
-    // A screenshot is no use to a model that can't see it.
-    expect(uiHint([], true, { screenshots: true })).not.toMatch(/screenshot/i);
+    // A model that can't see gets screenshots described (the agent says whether it can check them).
+    expect(uiHint([], true, { screenshots: true })).toMatch(/screenshot.*compare it with the image/i);
+    expect(uiHint([], true)).not.toMatch(/screenshot/i);
   });
 
   test("the palette is the image's real colors, text colors included, without antialiasing shades", () => {

@@ -40,7 +40,7 @@ An independent review of this branch (2026-10-19) reported 12 issues plus minor 
 - **Semantic (embedding) search** over code and docs. Lexical search (ripgrep, SQLite FTS5) is the default; an always-on embedding model doesn't fit next to a coding model in 11 GiB.
 - **Syntax-aware code index** (symbols, references, call graph) and incremental indexing. `grep`/`glob` plus the model are used instead.
 - **Diff preview before edits** and an automatic git checkpoint before a run.
-- **MCP beyond tools**: OAuth sign-in (a token in `headers` works), resources, prompts, sampling, elicitation, roots, `subscriptions/listen` and picking up tool-list changes mid-session. Images an MCP tool returns reach the model only when it sees images itself (`modelSeesImages`); they are not passed to the vision model.
+- **MCP beyond tools**: OAuth sign-in (a token in `headers` works), resources, prompts, sampling, elicitation, roots, `subscriptions/listen` and picking up tool-list changes mid-session. Images an MCP tool returns are shown to a model that sees images (`modelSeesImages`), else described by the vision model.
 - **Dedicated test/lint/format tools**: the detected commands are given to the model and run through `bash`.
 - **Breaking-change detection beyond keywords** in release notes.
 - **Automatic prompt optimization loops**: `learn propose` makes one candidate per call; a person runs the benchmark and promotes.

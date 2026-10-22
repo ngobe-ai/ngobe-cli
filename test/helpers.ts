@@ -62,6 +62,8 @@ export interface FakeTurn {
  */
 export function fakeModel(turns: FakeTurn[], onRequest?: (body: Record<string, unknown>, n: number) => Response | Promise<Response> | undefined) {
   const requests: Record<string, unknown>[] = [];
+  /** Each chat request's Authorization header (null: none sent). */
+  const authorization: (string | null)[] = [];
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -71,6 +73,7 @@ export function fakeModel(turns: FakeTurn[], onRequest?: (body: Record<string, u
       }
       const body = (await req.json()) as Record<string, unknown>;
       requests.push(body);
+      authorization.push(req.headers.get("authorization"));
       const override = await onRequest?.(body, requests.length);
       if (override) return override;
       const turn = turns[Math.min(requests.length - 1, turns.length - 1)] ?? { content: "" };
@@ -105,7 +108,7 @@ export function fakeModel(turns: FakeTurn[], onRequest?: (body: Record<string, u
       return new Response(body2, { headers: { "content-type": "text/event-stream" } });
     },
   });
-  return { baseURL: `http://localhost:${server.port}/v1`, requests, stop: () => server.stop(true) };
+  return { baseURL: `http://localhost:${server.port}/v1`, requests, authorization, stop: () => server.stop(true) };
 }
 
 export function tmpDir(prefix = "ngobe-test-"): string {

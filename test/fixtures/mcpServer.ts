@@ -11,6 +11,13 @@
 
 type Msg = { jsonrpc: "2.0"; id?: number | string; method?: string; params?: Record<string, any>; result?: any; error?: any };
 
+/** What the "image" tool returns: a PNG (a 10×10 header, padded to 3 KB), like a small screenshot. */
+export const IMAGE_PNG = (() => {
+  const b = Buffer.alloc(3000);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 10, 0, 0, 0, 10, 8, 6]);
+  return b.toString("base64");
+})();
+
 export const TOOLS = [
   { name: "echo", description: "Echo the text back. Second sentence.", inputSchema: { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties: { text: { type: "string", description: "What to echo. Long details here." } }, required: ["text"] }, annotations: { readOnlyHint: true } },
   { name: "add", description: "Add two numbers", inputSchema: { type: "object", properties: { a: { type: "number" }, b: { type: "number" } }, required: ["a", "b"] } },
@@ -81,7 +88,7 @@ export function handler(mode: string, send: (m: Msg) => void, exit: (code: numbe
         case "image":
           return reply({
             content: [
-              { type: "image", data: Buffer.alloc(3000).toString("base64"), mimeType: "image/png" },
+              { type: "image", data: IMAGE_PNG, mimeType: "image/png" },
               { type: "resource_link", uri: "file:///x/a.txt", name: "a.txt", mimeType: "text/plain" },
               { type: "resource", resource: { uri: "file:///x/b.txt", text: "inside b" } },
             ],

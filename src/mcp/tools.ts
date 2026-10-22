@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import type { Args, Need, Tool } from "../types.js";
+import type { Config } from "../config.js";
+import { wantsUi } from "../design.js";
+import type { Args, Need, Tool, ToolContext, ToolImage } from "../types.js";
+import { describeImageData } from "../vision.js";
 import type { CallToolResult, ContentItem, McpClient, McpToolDef } from "./client.js";
 import type { McpServerSpec } from "./config.js";
 
@@ -80,6 +83,17 @@ function itemText(c: ContentItem, shown: boolean): string {
   }
 }
 
+/** The vision model's description of each image; one it can't describe is left out (its placeholder stays). */
+async function describeAll(config: Config, images: ToolImage[], ctx: ToolContext): Promise<string[]> {
+  const purpose = wantsUi(ctx.request ?? "") ? "ui" : "general";
+  const out: string[] = [];
+  for (const image of images) {
+    const seen = await describeImageData(config, image, ctx.signal, purpose).catch(() => null);
+    if (seen) out.push(`What the image shows (from the vision model):\n${seen}`);
+  }
+  return out;
+}
+
 /**
  * What the model reads: the text items (and placeholders for media), else the structured result.
  * `shown`: the images go to the model separately (it sees images), so their placeholders say so.
@@ -118,9 +132,12 @@ export function toTool(client: McpClient, def: McpToolDef, lean: boolean): Tool 
     activity: () => `Calling ${spec.name}: ${def.name}`,
     async run(args, ctx) {
       const result = await client.callTool(def.name, args, ctx.signal ?? AbortSignal.timeout(spec.toolTimeoutMs));
-      // A browser screenshot is seen, not described, by a model that takes images.
-      if (ctx.attach) for (const c of result.content ?? []) if (showable(c)) ctx.attach({ mime: c.mimeType!, data: c.data! });
-      const text = resultText(result, Boolean(ctx.attach));
+      const images = (result.content ?? []).filter(showable).map((c) => ({ mime: c.mimeType!, data: c.data! }));
+      // A browser screenshot is seen by a model that takes images, and described by the vision model for one that doesn't.
+      if (ctx.attach) images.forEach((i) => ctx.attach!(i));
+      const config = ctx.config;
+      const described = !ctx.attach && config?.visionModel ? await describeAll(config, images, ctx) : [];
+      const text = [resultText(result, Boolean(ctx.attach)), ...described].filter(Boolean).join("\n\n");
       if (result.isError) throw new Error(text || `${def.name} reported an error`);
       return text || "(no output)";
     },

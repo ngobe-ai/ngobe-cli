@@ -946,6 +946,24 @@ describe("strong models", () => {
     expect(user?.content).toMatch(/compare it with the image/i);
   });
 
+  test("screenshots are part of the plan only when the model can see them or have them described", async () => {
+    const hint = async (overrides: Partial<Config>) => {
+      const { agent, model } = setup([{ content: "Built." }], [screenshot({})], overrides);
+      await agent.run("build this landing page from the mockup image", new AbortController().signal);
+      return String((model.requests[0].messages as Message[]).find((m) => m.role === "user")?.content);
+    };
+    expect(await hint({ visionModel: "vision-model" })).toMatch(/take a screenshot/i);
+    expect(await hint({})).not.toMatch(/screenshot/i);
+  });
+
+  test("without an API key no Authorization header is sent (gateways refuse a made-up one)", async () => {
+    for (const apiKey of ["not-needed", "sk-real"]) {
+      const { agent, model } = setup([{ content: "ok" }], [], { apiKey });
+      await agent.run("hi", new AbortController().signal);
+      expect(model.authorization[0]).toBe(apiKey === "sk-real" ? "Bearer sk-real" : null);
+    }
+  });
+
   test("a design image named in the request is shown to the model on its first turn", async () => {
     const { agent, model, config } = setup([{ content: "Built." }], [readFile], { modelSeesImages: true });
     const png = new Uint8Array(33);

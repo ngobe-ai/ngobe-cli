@@ -74,7 +74,14 @@ export class LLM {
     // The SDK timeout would cut long streams; the idle timer in attempt() bounds requests instead.
     // Bun's fetch gives up after 5 minutes, and a cold prompt on a CPU server can take longer to
     // start answering: requests are bounded by the idle timer in attempt() alone.
-    const fetchNoLimit = ((url: RequestInfo | URL, init?: RequestInit) => fetch(url, { ...init, timeout: false } as RequestInit)) as typeof fetch;
+    // No key: no Authorization header. The SDK needs some key and sends it, and a gateway that serves
+    // anonymous users (Kilo's free models) refuses a made-up one with 401.
+    const anonymous = !cfg.apiKey || cfg.apiKey === "not-needed";
+    const fetchNoLimit = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (anonymous) headers.delete("authorization");
+      return fetch(url, { ...init, headers, timeout: false } as RequestInit);
+    }) as typeof fetch;
     this.client = new OpenAI({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, maxRetries: cfg.maxRetries, timeout: 60 * 60_000, fetch: fetchNoLimit });
     this.temperature = cfg.temperature;
     this.textTools = cfg.toolMode === "text";

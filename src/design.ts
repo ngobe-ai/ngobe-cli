@@ -41,8 +41,8 @@ const FAITHFULLY =
 
 /**
  * Guidance that rides on a UI request (not in the system prompt, which stays the same for every
- * request). `sees`: the model is shown images itself; `screenshots`: a browser tool can take one,
- * so a model that sees can check its work against the design.
+ * request). `sees`: the model is shown images itself; `screenshots`: a browser tool can take one
+ * and the model gets it (shown, or described by the vision model), so it can check its work.
  */
 export function uiHint(stack: string[], image = true, opts: { sees?: boolean; screenshots?: boolean } = {}): string {
   const what = !image
@@ -50,7 +50,7 @@ export function uiHint(stack: string[], image = true, opts: { sees?: boolean; sc
     : opts.sees
       ? `Building a UI from an image: you can see the image (it comes with the read_file result; read the file if it isn't shown yet), with its measured colors. ${FAITHFULLY}`
       : `Building a UI from an image: the image was read for you as a blueprint (layout, components, exact texts) with its measured colors. ${FAITHFULLY}`;
-  const check = !(opts.sees && opts.screenshots)
+  const check = !opts.screenshots
     ? ""
     : image
       ? " When it's built, open the page with the browser tools, take a screenshot and compare it with the image: fix every difference (layout, alignment, spacing, colors, texts), then check again until they match."

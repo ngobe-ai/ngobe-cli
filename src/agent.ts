@@ -585,8 +585,8 @@ export class Agent {
     this.lookedAt = null;
     // Hints ride on the user message, not the system prompt: the system prompt and tool list stay
     // byte-identical between requests, so llama.cpp reuses its cache of them instead of re-reading.
-    // A model that sees images can check its work in a browser screenshot.
-    const screenshots = toolsForMode(this.d.tools, this.mode).some((t) => /screenshot/i.test(t.name));
+    // A browser screenshot checks the work when the model gets it: shown, or described by the vision model.
+    const screenshots = (config.modelSeesImages || !!config.visionModel) && toolsForMode(this.d.tools, this.mode).some((t) => /screenshot/i.test(t.name));
     const design = wantsUi(userInput)
       ? uiHint([...(this.d.stack ?? []), ...requestedStack(userInput)], fromImage(userInput), { sees: config.modelSeesImages, screenshots })
       : "";

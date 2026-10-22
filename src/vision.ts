@@ -90,6 +90,19 @@ async function paletteNote(file: string): Promise<string> {
   return palette.length ? `\n\nMeasured colors (from the pixels, most used first; use these exact values): ${palette.map((c) => `${c.hex} ${c.share}%`).join(", ")}` : "";
 }
 
+/** describeImage for an image that is only data (a tool's screenshot): written to a temporary file first. */
+export async function describeImageData(config: Config, image: ToolImage, signal?: AbortSignal, purpose: "general" | "ui" = "general"): Promise<string | null> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ngobe-shot-"));
+  const file = path.join(dir, `image.${image.mime.split("/")[1] ?? "png"}`);
+  try {
+    const buf = Buffer.from(image.data, "base64");
+    fs.writeFileSync(file, buf);
+    return await describeImage(config, file, buf, signal, purpose);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** The image as the server can take it: PNG/JPEG as is when small, else a converted JPEG. */
 async function prepare(file: string, buf: Uint8Array): Promise<{ mime: string; data: Buffer } | null> {
   const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
